@@ -9,8 +9,6 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAdjusters;
 import java.util.Calendar;
 import java.util.Date;
-import java.util.TimeZone;
-import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
@@ -63,26 +61,6 @@ public class RotationUtils {
     }
     
     /**
-     * Calculate the week number within a campaign period
-     * 
-     * @param currentDate The current date
-     * @param campaignStartDate Start date of the campaign
-     * @return Week number (1-based) relative to campaign start
-     */
-    public int getWeekNumberInCampaign(Date currentDate, Date campaignStartDate) {
-        // Get start of week for both dates
-        Date currentWeekStart = getWeekStartDate(currentDate);
-        Date campaignWeekStart = getWeekStartDate(campaignStartDate);
-        
-        // Calculate difference in days
-        long diffInMillis = currentWeekStart.getTime() - campaignWeekStart.getTime();
-        long diffInDays = TimeUnit.DAYS.convert(diffInMillis, TimeUnit.MILLISECONDS);
-        
-        // Calculate week number (1-based)
-        return (int)(diffInDays / 7) + 1;
-    }
-    
-    /**
      * Convert string date to Date object
      * 
      * @param dateString Date in yyyy-MM-dd format
@@ -112,48 +90,26 @@ public class RotationUtils {
     /**
      * Get week key for a given date
      * Format: YYYY-WW where WW is the week number in the year
+     * Uses Monday as first day of week to ensure consistent calendar weeks
      * 
      * @param date The date to get week key for
      * @return Week key in YYYY-WW format
      */
     public String getWeekKey(Date date) {
         Calendar cal = Calendar.getInstance();
+        // Set Monday as first day of week to ensure consistent calendar weeks
+        cal.setFirstDayOfWeek(Calendar.MONDAY);
+        cal.setMinimalDaysInFirstWeek(4); // ISO 8601 standard
         cal.setTime(date);
+        
         int year = cal.get(Calendar.YEAR);
         int week = cal.get(Calendar.WEEK_OF_YEAR);
+        
+        // Log for debugging
+        log.debug("Date {} is in week {}-{}", 
+               new SimpleDateFormat("yyyy-MM-dd").format(date), year, week);
+        
         return year + "-" + String.format("%02d", week);
-    }
-    
-    /**
-     * Calculate rotation pattern for campaigns over a period
-     * 
-     * @param numberOfCampaigns Number of campaigns to rotate
-     * @param numberOfWeeks Total number of weeks to plan for
-     * @return 2D array where [week][position] gives campaign index
-     */
-    public int[][] calculateRotationPattern(int numberOfCampaigns, int numberOfWeeks) {
-        int[][] rotationPattern = new int[numberOfWeeks][numberOfCampaigns];
-        
-        for (int week = 0; week < numberOfWeeks; week++) {
-            for (int pos = 0; pos < numberOfCampaigns; pos++) {
-                // Simple rotation: each week, shift campaigns by 1 position
-                rotationPattern[week][pos] = (pos + week) % numberOfCampaigns;
-            }
-        }
-        
-        return rotationPattern;
-    }
-    
-    /**
-     * Determine campaign priority for a specific week
-     * 
-     * @param campaignIndex Index of the campaign
-     * @param weekNumber Week number in the campaign cycle
-     * @param totalCampaigns Total number of campaigns in rotation
-     * @return Priority (lower number = higher priority)
-     */
-    public int getCampaignPriorityForWeek(int campaignIndex, int weekNumber, int totalCampaigns) {
-        return (campaignIndex + weekNumber - 1) % totalCampaigns;
     }
     
     /**
