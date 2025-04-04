@@ -40,4 +40,24 @@ public class RotationCampaignController {
         CampaignResponseDTO campaign = campaignService.getNextEligibleCampaign(date, company);
         return ResponseEntity.ok(campaign);
     }
+    
+    /**
+     * Legacy endpoint for getting eligible campaigns for rotations
+     * Maintained for backward compatibility
+     * 
+     * @param date Request date in format yyyyMMdd
+     * @param company Company identifier
+     * @return Next eligible campaign, or appropriate status if none available
+     * @throws DataHandlingException if there's an issue with data handling
+     */
+    @RequestMapping(method = RequestMethod.GET, value = "/all")
+    public ResponseEntity<CampaignResponseDTO> getEligibleCampaignsForRotations(
+            @RequestParam("date") String date,
+            @RequestParam("company") String company) throws DataHandlingException {
+        
+        log.info("Legacy call: Getting eligible campaigns for company {} on date {}", company, date);
+        
+        CampaignResponseDTO campaign = campaignService.updateEligibleCampaignsForRotations(date, company);
+        return ResponseEntity.ok(campaign);
+    }
 }

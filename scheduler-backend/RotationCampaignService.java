@@ -79,6 +79,37 @@ public class RotationCampaignService {
         return mapToDTO(selectedCampaign);
     }
     
+
+    /**
+     * Legacy method for updating eligible campaigns for rotations
+     * This maintains backward compatibility with the original implementation
+     * while using the new rotation logic internally
+     * 
+     * @param requestDate Date in format yyyyMMdd
+     * @param company Company identifier
+     * @return Updated campaign
+     * @throws DataHandlingException if no eligible campaigns are found
+     */
+    @Transactional
+    public CampaignResponseDTO updateEligibleCampaignsForRotations(String requestDate, String company) 
+            throws DataHandlingException {
+        
+        log.info("Updating eligible campaigns for rotations: date={}, company={}", requestDate, company);
+        
+        // Get the next eligible campaign using the new rotation logic
+        CampaignResponseDTO selectedCampaign = getNextEligibleCampaign(requestDate, company);
+        
+        if (selectedCampaign == null) {
+            throw new DataHandlingException(HttpStatus.OK.toString(),
+                    "No campaigns eligible for rotation");
+        }
+        
+        log.info("Selected campaign {} for company {}", selectedCampaign.getId(), company);
+        
+        return selectedCampaign;
+    }
+
+
     /**
      * Reset weekly frequency for campaigns if needed
      * 
