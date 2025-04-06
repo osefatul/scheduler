@@ -41,20 +41,17 @@ public class CampaignMapping {
     @Column(nullable = false, name = "insight")
     private String insight;
     
-    @Column(nullable = false, name = "company_names")
-    private String companyNames;
-    
     @Column(name = "eligible_companies")
     private Integer eligibleCompanies;
     
     @Column(name = "eligible_users")
     private Integer eligibleUsers;
     
-    @Column(name = "start_date", nullable = false)
+    @Column(name = "start_date")
     @Temporal(TemporalType.DATE)
     private Date startDate;
     
-    @Column(name = "end_date", nullable = false)
+    @Column(name = "end_date")
     @Temporal(TemporalType.DATE)
     private Date endDate;
     
@@ -93,19 +90,13 @@ public class CampaignMapping {
     private Date requested_date;
     
     @Column(name = "status")
-    private String status; // DRAFT, SCHEDULED, ACTIVE, COMPLETED, CANCELLED
+    private String status; // DRAFT, SCHEDULED, ACTIVE, COMPLETED, CANCELLED, INPROGRESS
     
     @Column(name = "rotation_status")
     private String rotation_status; // null (show first), ROTATION_POSITION_X, ROTATED_RECENTLY, etc.
     
-    @Column(name = "rotation_priority")
-    private Integer rotationPriority; // Optional explicit priority (lower = higher priority)
-    
-    @Column(name = "learn_more_url")
-    private String learnMoreUrl; // URL for "Learn More" action
-    
-    @Column(name = "form_submission_url")
-    private String formSubmissionUrl; // URL for form submission
+    @Column(name = "campaign_steps")
+    private String campaignSteps; // MAP_INSIGHT, CAMPAIGN_DURATION, REVIEW, SUBMIT
     
     /**
      * Check if the campaign is eligible for display
@@ -116,17 +107,19 @@ public class CampaignMapping {
     @Transient
     public boolean isEligibleForDisplay(Date currentDate) {
         // Must be within date range
-        if (currentDate.before(startDate) || currentDate.after(endDate)) {
-            return false;
+        if (startDate != null && endDate != null) {
+            if (currentDate.before(startDate) || currentDate.after(endDate)) {
+                return false;
+            }
         }
         
         // Must have available display quota
-        if (displayCapping <= 0) {
+        if (displayCapping != null && displayCapping <= 0) {
             return false;
         }
         
         // Must have available weekly frequency
-        if (frequencyPerWeek <= 0) {
+        if (frequencyPerWeek != null && frequencyPerWeek <= 0) {
             return false;
         }
         
@@ -136,7 +129,7 @@ public class CampaignMapping {
         }
         
         // Must be active or scheduled
-        if (!"ACTIVE".equals(status) && !"SCHEDULED".equals(status)) {
+        if (!"ACTIVE".equals(status) && !"SCHEDULED".equals(status) && !"INPROGRESS".equals(status)) {
             return false;
         }
         
@@ -151,14 +144,12 @@ public class CampaignMapping {
      */
     @Transient
     public boolean needsFrequencyReset(Date weekStartDate) {
-        if (updatedDate == null) {
+        if (updatedDate == null || orginalFrequencyPerWeek == null) {
             return false;
         }
         
         // If last update was before this week's start and frequency is not at original value
-        return updatedDate.before(weekStartDate) && 
-               orginalFrequencyPerWeek != null && 
-               !frequencyPerWeek.equals(orginalFrequencyPerWeek);
+        return updatedDate.before(weekStartDate) && !frequencyPerWeek.equals(orginalFrequencyPerWeek);
     }
     
     /**

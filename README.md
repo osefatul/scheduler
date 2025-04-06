@@ -1,5 +1,115 @@
 # Scheduler
 
+# Corrected Test API Examples
+
+## Create Campaign API Calls
+
+### Create First Campaign:
+```bash
+curl -X POST "http://localhost:8080/api/v1/campaigns" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "First Campaign",
+    "bannerId": "BANNER-001",
+    "insightType": "PROMOTION",
+    "insightSubType": "SEASONAL",
+    "insight": "Spring promotion for all companies",
+    "companyNames": "ABCCorp|XYZInc",
+    "eligibleCompanies": 10,
+    "eligibleUsers": 1000,
+    "startDate": "2025-05-01",
+    "endDate": "2025-05-31",
+    "frequencyPerWeek": 2,
+    "displayCapping": 8,
+    "displayLocation": "HOME_PAGE",
+    "createdBy": "admin",
+    "action": "ACTIVE"
+  }'
+```
+
+### Create Second Campaign:
+```bash
+curl -X POST "http://localhost:8080/api/v1/campaigns" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Second Campaign",
+    "bannerId": "BANNER-002",
+    "insightType": "DISCOUNT",
+    "insightSubType": "PERCENTAGE",
+    "insight": "Special 20% discount for selected companies",
+    "companyNames": "ABCCorp|123Corp",
+    "eligibleCompanies": 5,
+    "eligibleUsers": 500,
+    "startDate": "2025-05-01",
+    "endDate": "2025-06-15",
+    "frequencyPerWeek": 3,
+    "displayCapping": 12,
+    "displayLocation": "DASHBOARD",
+    "createdBy": "admin",
+    "action": "ACTIVE"
+  }'
+```
+
+### Create Third Campaign:
+```bash
+curl -X POST "http://localhost:8080/api/v1/campaigns" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Third Campaign",
+    "bannerId": "BANNER-003",
+    "insightType": "AWARENESS",
+    "insightSubType": "PRODUCT",
+    "insight": "Introducing our new product line",
+    "companyNames": "ABCCorp|XYZInc|123Corp",
+    "eligibleCompanies": 8,
+    "eligibleUsers": 800,
+    "startDate": "2025-05-15",
+    "endDate": "2025-06-30",
+    "frequencyPerWeek": 1,
+    "displayCapping": 6,
+    "displayLocation": "SIDEBAR",
+    "createdBy": "admin",
+    "action": "ACTIVE"
+  }'
+```
+
+## Notes on Schema
+
+The campaign table should have a `company_names` column that stores pipe-separated company identifiers:
+
+```sql
+CREATE TABLE campaigns_dev_rotation1 (
+    -- other columns...
+    company_names VARCHAR(255) NOT NULL,
+    -- other columns...
+);
+```
+
+The repository query for finding eligible campaigns for a company should use a LIKE operator:
+
+```sql
+@Query(value = "SELECT * FROM [dbo].[campaigns_dev_rotation1] WHERE "
+        + "([start_date] <= :current_date AND [end_date] >= :current_date) "
+        + "AND (visibility is NULL OR visibility != 'COMPLETED') "
+        + "AND company_names LIKE %:company% " -- This is the part that matters
+        + "AND (status = 'ACTIVE' OR status = 'SCHEDULED') "
+        + "ORDER BY created_date ASC", 
+        nativeQuery = true)
+List<CampaignMapping> getEligibleCampaignsBasedonRequestDate(
+        @Param("current_date") String currentDate,
+        @Param("company") String company);
+```
+
+The actual matching logic depends on how exact you want the matching to be. For example:
+- `LIKE '%|ABCCorp|%'` would match only if the company is in the middle
+- `LIKE '%ABCCorp%'` would match if the string exists anywhere
+- `LIKE '%|ABCCorp|%' OR company_names = 'ABCCorp' OR company_names LIKE 'ABCCorp|%' OR company_names LIKE '%|ABCCorp'` would be most precise
+
+For most accurate matching, consider using a separate join table that maps campaigns to companies in a many-to-many relationship.
+
+
+
+
 # Campaign Rotation API Testing Examples
 
 ## 1. Get Next Eligible Campaign for a Company
@@ -251,3 +361,81 @@ curl -X GET "http://localhost:8080/api/v1/rotatecampaign/next?date=20250601&comp
 2. Call API 3 times over different days
 3. Campaign B should be marked as COMPLETED
 4. After that, B should not appear in rotation
+
+
+
+### Create campaign_company_mapping table for many-to-many relationship
+
+```sql
+CREATE TABLE campaign_company_mapping (
+    id VARCHAR(36) PRIMARY KEY,
+    campaign_id VARCHAR(36) NOT NULL,
+    company_id VARCHAR(100) NOT NULL,
+    CONSTRAINT fk_campaign FOREIGN KEY (campaign_id) REFERENCES campaigns_dev_rotation1(id) ON DELETE CASCADE,
+    CONSTRAINT uk_campaign_company UNIQUE (campaign_id, company_id)
+);
+
+-- Create indexes for better performance
+CREATE INDEX idx_campaign_id ON campaign_company_mapping (campaign_id);
+CREATE INDEX idx_company_id ON campaign_company_mapping (company_id);
+
+-- Note: Original campaigns_dev_rotation1 table already exists
+-- You may want to keep the company_names column for backward compatibility
+-- or implement a migration script to populate the new mapping table from existing data
+
+-- Sample migration script to populate the mapping table from existing data
+-- This can be run as a one-time operation during implementation
+INSERT INTO campaign_company_mapping (id, campaign_id, company_id)
+SELECT 
+    NEWID(), -- Generate a new UUID for each mapping
+    id as campaign_id,
+    value as company_id
+FROM 
+    campaigns_dev_rotation1
+CROSS APPLY STRING_SPLIT(company_names, '|')
+WHERE 
+    company_names IS NOT NULL AND company_names <> '';
+
+-- If you decide to remove the company_names column later:
+-- ALTER TABLE campaigns_dev_rotation1 DROP COLUMN company_names;
+
+-- Sample Data - Companies
+-- These would likely come from an existing company table
+INSERT INTO companies (id, name, status) VALUES
+('ABCCorp', 'ABC Corporation', 'ACTIVE'),
+('XYZInc', 'XYZ Inc.', 'ACTIVE'),
+('123Corp', '123 Corporation', 'ACTIVE');
+
+-- Sample Data - Campaigns
+-- These would be used for testing the rotation logic
+INSERT INTO campaigns_dev_rotation1 
+(id, name, banner_id, insight_type, insight_sub_type, insight, eligible_companies, 
+eligible_users, start_date, end_date, frequency_per_week, display_capping, 
+display_location, created_by, created_date, status)
+VALUES
+(
+    NEWID(), 
+    'First Campaign', 
+    'BANNER-001', 
+    'PROMOTION', 
+    'SEASONAL', 
+    'Spring promotion for all companies',
+    10,
+    1000,
+    '2025-05-01',
+    '2025-05-31',
+    2,
+    8,
+    'HOME_PAGE',
+    'admin',
+    GETDATE(),
+    'ACTIVE'
+);
+
+-- Sample Data - Campaign-Company Mappings
+-- Associate the sample campaign with companies
+INSERT INTO campaign_company_mapping (id, campaign_id, company_id)
+SELECT NEWID(), id, 'ABCCorp' FROM campaigns_dev_rotation1 WHERE name = 'First Campaign'
+UNION
+SELECT NEWID(), id, 'XYZInc' FROM campaigns_dev_rotation1 WHERE name = 'First Campaign';
+```

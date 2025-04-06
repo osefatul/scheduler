@@ -1,0 +1,22 @@
+@Data
+public class CampaignResponseDTO {
+    private String id;
+    private String name;
+    private String bannerId;
+    private String insightType;
+    private String insightSubType;
+    private String insight;
+    private String companyNames;
+    private Integer eligibleCompanies;
+    private Integer eligibleUsers;
+    private Date startDate;
+    private Date endDate;
+    private Integer frequencyPerWeek;
+    private Integer displayCapping;
+    private String displayLocation;
+    private String createdBy;
+    private Date createdDate;
+    private String status; // DRAFT, SCHEDULED, ACTIVE, COMPLETED, CANCELLED, INPROGRESS
+    private String visibility; // VISIBLE, COMPLETED
+    private String campaignSteps; // MAP_INSIGHT, CAMPAIGN_DURATION, REVIEW, SUBMIT
+}

@@ -1,0 +1,36 @@
+@Data
+public class CampaignRequestDTO {
+    
+    private String id;
+
+    @NotBlank(message = "Campaign name is required")
+    private String name;
+
+    @NotBlank(message = "Banner ID is required")
+    private String bannerId;
+
+    @NotBlank(message = "Insight Type is required")
+    private String insightType;
+
+    @NotBlank(message = "Insight Sub Type is required")
+    private String insightSubType;
+
+    @NotBlank(message = "Insight is required")
+    private String insight;
+    
+    private String companyNames;
+
+    private Integer eligibleCompanies;
+    
+    private Integer eligibleUsers;
+
+    private Date startDate;
+
+    private Date endDate;
+    
+    private Integer frequencyPerWeek;
+    private Integer displayCapping;
+    private String displayLocation;
+    private String createdBy;
+    private String action; // SETUP, CONFIGURE, REVIEW, SUBMIT
+}

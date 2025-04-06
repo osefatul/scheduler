@@ -2,7 +2,6 @@ package com.usbank.corp.dcr.api.service;
 
 import java.util.Date;
 import java.util.List;
-import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,34 +22,41 @@ public class RotationCampaignService {
     private static final Logger log = LoggerFactory.getLogger(RotationCampaignService.class);
     
     private final CampaignRepository campaignRepository;
+    private final CampaignCompanyService campaignCompanyService;
+    private final CampaignService campaignService;
     
     @Autowired
     RotationUtils rotationUtils;
     
     @Autowired
-    public RotationCampaignService(CampaignRepository campaignRepository) {
+    public RotationCampaignService(CampaignRepository campaignRepository,
+                                  CampaignCompanyService campaignCompanyService,
+                                  CampaignService campaignService) {
         this.campaignRepository = campaignRepository;
+        this.campaignCompanyService = campaignCompanyService;
+        this.campaignService = campaignService;
     }
     
     /**
      * Gets the next eligible campaign for rotation based on company
+     * Uses the improved company mapping approach
      * 
      * @param requestDate Date in format yyyyMMdd
-     * @param company Company identifier
+     * @param companyId Company identifier
      * @return Next eligible campaign for the company
      * @throws DataHandlingException if no eligible campaigns are found
      */
     @Transactional
-    public CampaignResponseDTO getNextEligibleCampaign(String requestDate, String company) 
+    public CampaignResponseDTO getNextEligibleCampaign(String requestDate, String companyId) 
             throws DataHandlingException {
         
         // Convert date format
         String formattedDate = rotationUtils.convertDate(requestDate);
         Date currentDate = rotationUtils.getinDate(formattedDate);
         
-        // Get all eligible campaigns for the company
+        // Get all eligible campaigns for the company using the join query
         List<CampaignMapping> eligibleCampaigns = campaignRepository
-                .getEligibleCampaignsBasedonRequestDate(formattedDate, company);
+                .getEligibleCampaignsForCompany(formattedDate, companyId);
         
         if (eligibleCampaigns.isEmpty()) {
             throw new DataHandlingException(HttpStatus.OK.toString(),
@@ -76,42 +82,41 @@ public class RotationCampaignService {
         // Update the selected campaign's counters and status
         updateCampaignAfterSelection(selectedCampaign, currentDate);
         
-        return mapToDTO(selectedCampaign);
+        // Generate response DTO with company information
+        return campaignService.mapToDTOWithCompanies(selectedCampaign);
     }
     
-
     /**
      * Legacy method for updating eligible campaigns for rotations
      * This maintains backward compatibility with the original implementation
      * while using the new rotation logic internally
      * 
      * @param requestDate Date in format yyyyMMdd
-     * @param company Company identifier
+     * @param companyId Company identifier
      * @return Updated campaign
      * @throws DataHandlingException if no eligible campaigns are found
      */
     @Transactional
-    public CampaignResponseDTO updateEligibleCampaignsForRotations(String requestDate, String company) 
+    public CampaignResponseDTO updateEligibleCampaignsForRotations(String requestDate, String companyId) 
             throws DataHandlingException {
         
-        log.info("Updating eligible campaigns for rotations: date={}, company={}", requestDate, company);
+        log.info("Updating eligible campaigns for rotations: date={}, company={}", requestDate, companyId);
         
         // Get the next eligible campaign using the new rotation logic
-        CampaignResponseDTO selectedCampaign = getNextEligibleCampaign(requestDate, company);
+        CampaignResponseDTO selectedCampaign = getNextEligibleCampaign(requestDate, companyId);
         
         if (selectedCampaign == null) {
             throw new DataHandlingException(HttpStatus.OK.toString(),
                     "No campaigns eligible for rotation");
         }
         
-        log.info("Selected campaign {} for company {}", selectedCampaign.getId(), company);
+        log.info("Selected campaign {} for company {}", selectedCampaign.getId(), companyId);
         
         return selectedCampaign;
     }
-
-
+    
     /**
-     * Reset weekly frequency for campaigns if needed
+     * Reset weekly frequency for campaigns that need it
      * 
      * @param campaigns List of campaigns to check
      * @param currentDate Current date
@@ -208,34 +213,13 @@ public class RotationCampaignService {
             campaign.setRotation_status(null);
         }
         
+        // Maintain campaign status and steps - don't modify these fields
+        // as they are managed by the multi-step form process
+        
         // Save updated campaign
         campaignRepository.save(campaign);
-    }
-    
-    /**
-     * Map campaign entity to DTO
-     * 
-     * @param campaign Campaign entity
-     * @return Campaign response DTO
-     */
-    public CampaignResponseDTO mapToDTO(CampaignMapping campaign) {
-        CampaignResponseDTO response = new CampaignResponseDTO();
-        response.setId(String.valueOf(campaign.getId()));
-        response.setName(campaign.getName());
-        response.setBannerId(campaign.getBannerId());
-        response.setInsightType(campaign.getInsightType());
-        response.setInsightSubType(campaign.getInsightSubType());
-        response.setInsight(campaign.getInsight());
-        response.setEligibleCompanies(campaign.getEligibleCompanies());
-        response.setEligibleUsers(campaign.getEligibleUsers());
-        response.setStartDate(campaign.getStartDate());
-        response.setEndDate(campaign.getEndDate());
-        response.setFrequencyPerWeek(campaign.getFrequencyPerWeek());
-        response.setDisplayCapping(campaign.getDisplayCapping());
-        response.setDisplayLocation(campaign.getDisplayLocation());
-        response.setCreatedBy(campaign.getCreatedBy());
-        response.setCreatedDate(campaign.getCreatedDate());
-        response.setStatus(campaign.getStatus());
-        return response;
+        
+        log.info("Updated campaign after selection: id={}, frequencyPerWeek={}, displayCapping={}, visibility={}", 
+                campaign.getId(), campaign.getFrequencyPerWeek(), campaign.getDisplayCapping(), campaign.getVisibility());
     }
 }
