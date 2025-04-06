@@ -29,6 +29,8 @@ public interface CampaignRepository extends JpaRepository<CampaignMapping, Strin
      * Find campaigns with any of the provided statuses
      */
     List<CampaignMapping> findByStatusIn(List<String> statuses);
+
+    boolean existsById(String id);
     
     /**
      * Get all eligible campaigns for a given date and company

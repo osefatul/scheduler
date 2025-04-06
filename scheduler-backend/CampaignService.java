@@ -38,74 +38,170 @@ public class CampaignService {
      * @param request Campaign request containing form data
      * @return Response DTO with campaign data
      */
+    // @Transactional
+    // public CampaignResponseDTO createOrUpdateCampaign(CampaignRequestDTO request) {
+    //     // Check if this is an update to an existing campaign
+    //     CampaignResponseDTO campaignResponseDTO = null;
+    //     if (Objects.nonNull(request.getId()) && !request.getId().isEmpty()) {
+    //         campaignResponseDTO = updateCampaignStatusAndCampaignSteps(request.getId(), request.getAction());
+    //     }
+        
+    //     // If no existing campaign or update failed, create a new one
+    //     if (campaignResponseDTO == null) {
+    //         // Create new campaign
+    //         CampaignMapping campaign = new CampaignMapping();
+            
+    //         // Set basic properties
+    //         campaign.setName(request.getName());
+    //         campaign.setBannerId(request.getBannerId());
+    //         campaign.setInsightType(request.getInsightType());
+    //         campaign.setInsightSubType(request.getInsightSubType());
+    //         campaign.setInsight(request.getInsight());
+    //         campaign.setEligibleCompanies(request.getEligibleCompanies());
+    //         campaign.setEligibleUsers(request.getEligibleUsers());
+            
+    //         // Set dates if provided
+    //         if (request.getStartDate() != null) {
+    //             campaign.setStartDate(request.getStartDate());
+    //         }
+    //         if (request.getEndDate() != null) {
+    //             campaign.setEndDate(request.getEndDate());
+    //         }
+            
+    //         // Set other properties if provided
+    //         if (request.getFrequencyPerWeek() != null) {
+    //             campaign.setFrequencyPerWeek(request.getFrequencyPerWeek());
+    //         }
+    //         if (request.getDisplayCapping() != null) {
+    //             campaign.setDisplayCapping(request.getDisplayCapping());
+    //         }
+    //         if (request.getDisplayLocation() != null) {
+    //             campaign.setDisplayLocation(request.getDisplayLocation());
+    //         }
+            
+    //         campaign.setCreatedBy(request.getCreatedBy());
+    //         campaign.setCreatedDate(new Date());
+            
+    //         // Set status and campaign steps based on action
+    //         String[] statusAndSteps = getStatusAndStepsFromAction(request.getAction());
+    //         campaign.setStatus(statusAndSteps[0]);
+    //         campaign.setCampaignSteps(statusAndSteps[1]);
+            
+    //         // Save campaign
+    //         CampaignMapping savedCampaign = campaignRepository.save(campaign);
+            
+    //         // If company names are provided, associate them
+    //         if (request.getCompanyNames() != null && !request.getCompanyNames().isEmpty()) {
+    //             List<String> companyIds = campaignCompanyService.processCompanyNames(request.getCompanyNames());
+    //             campaignCompanyService.associateCampaignWithCompanies(savedCampaign.getId(), companyIds);
+    //         }
+            
+    //         campaignResponseDTO = mapToDTO(savedCampaign);
+            
+    //         // Set company names in response
+    //         if (request.getCompanyNames() != null) {
+    //             campaignResponseDTO.setCompanyNames(request.getCompanyNames());
+    //         }
+    //     }
+        
+    //     return campaignResponseDTO;
+    // }
+
+
+
     @Transactional
-    public CampaignResponseDTO createOrUpdateCampaign(CampaignRequestDTO request) {
-        // Check if this is an update to an existing campaign
-        CampaignResponseDTO campaignResponseDTO = null;
-        if (Objects.nonNull(request.getId()) && !request.getId().isEmpty()) {
-            campaignResponseDTO = updateCampaignStatusAndCampaignSteps(request.getId(), request.getAction());
-        }
+public CampaignResponseDTO createOrUpdateCampaign(CampaignRequestDTO request) {
+    CampaignMapping campaign;
+    
+
+    log.info("Received campaign request: id={}, action={}, startDate={}, endDate={}, frequencyPerWeek={}, displayCapping={}", 
+    request.getId(), request.getAction(), request.getStartDate(), request.getEndDate(), 
+    request.getFrequencyPerWeek(), request.getDisplayCapping());
+    
+    // Check if this is an update to an existing campaign
+    if (request.getId() != null && !request.getId().isEmpty()) {
+        // This is an update - get existing campaign
+        campaign = campaignRepository.findById(request.getId())
+                .orElseThrow(() -> new RuntimeException("Campaign not found with id: " + request.getId()));
         
-        // If no existing campaign or update failed, create a new one
-        if (campaignResponseDTO == null) {
-            // Create new campaign
-            CampaignMapping campaign = new CampaignMapping();
-            
-            // Set basic properties
+        // Update campaign steps and status based on action
+        String[] statusAndSteps = getStatusAndStepsFromAction(request.getAction());
+        campaign.setStatus(statusAndSteps[0]);
+        campaign.setCampaignSteps(statusAndSteps[1]);
+        
+        // Important: Update all fields that are provided in the request
+        if (request.getName() != null) {
             campaign.setName(request.getName());
+        }
+        if (request.getBannerId() != null) {
             campaign.setBannerId(request.getBannerId());
+        }
+        if (request.getInsightType() != null) {
             campaign.setInsightType(request.getInsightType());
+        }
+        if (request.getInsightSubType() != null) {
             campaign.setInsightSubType(request.getInsightSubType());
+        }
+        if (request.getInsight() != null) {
             campaign.setInsight(request.getInsight());
+        }
+        if (request.getEligibleCompanies() != null) {
             campaign.setEligibleCompanies(request.getEligibleCompanies());
+        }
+        if (request.getEligibleUsers() != null) {
             campaign.setEligibleUsers(request.getEligibleUsers());
-            
-            // Set dates if provided
-            if (request.getStartDate() != null) {
-                campaign.setStartDate(request.getStartDate());
-            }
-            if (request.getEndDate() != null) {
-                campaign.setEndDate(request.getEndDate());
-            }
-            
-            // Set other properties if provided
-            if (request.getFrequencyPerWeek() != null) {
-                campaign.setFrequencyPerWeek(request.getFrequencyPerWeek());
-            }
-            if (request.getDisplayCapping() != null) {
-                campaign.setDisplayCapping(request.getDisplayCapping());
-            }
-            if (request.getDisplayLocation() != null) {
-                campaign.setDisplayLocation(request.getDisplayLocation());
-            }
-            
-            campaign.setCreatedBy(request.getCreatedBy());
-            campaign.setCreatedDate(new Date());
-            
-            // Set status and campaign steps based on action
-            String[] statusAndSteps = getStatusAndStepsFromAction(request.getAction());
-            campaign.setStatus(statusAndSteps[0]);
-            campaign.setCampaignSteps(statusAndSteps[1]);
-            
-            // Save campaign
-            CampaignMapping savedCampaign = campaignRepository.save(campaign);
-            
-            // If company names are provided, associate them
-            if (request.getCompanyNames() != null && !request.getCompanyNames().isEmpty()) {
-                List<String> companyIds = campaignCompanyService.processCompanyNames(request.getCompanyNames());
-                campaignCompanyService.associateCampaignWithCompanies(savedCampaign.getId(), companyIds);
-            }
-            
-            campaignResponseDTO = mapToDTO(savedCampaign);
-            
-            // Set company names in response
-            if (request.getCompanyNames() != null) {
-                campaignResponseDTO.setCompanyNames(request.getCompanyNames());
-            }
         }
         
-        return campaignResponseDTO;
+        // These are the fields from the second step (CONFIGURE)
+        // Explicitly check and update these
+        if (request.getStartDate() != null) {
+            campaign.setStartDate(request.getStartDate());
+        }
+        if (request.getEndDate() != null) {
+            campaign.setEndDate(request.getEndDate());
+        }
+        if (request.getFrequencyPerWeek() != null) {
+            campaign.setFrequencyPerWeek(request.getFrequencyPerWeek());
+        }
+        if (request.getDisplayCapping() != null) {
+            campaign.setDisplayCapping(request.getDisplayCapping());
+        }
+        if (request.getDisplayLocation() != null) {
+            campaign.setDisplayLocation(request.getDisplayLocation());
+        }
+        
+        // Update company associations if provided
+        if (request.getCompanyNames() != null && !request.getCompanyNames().isEmpty()) {
+            List<String> companyIds = campaignCompanyService.processCompanyNames(request.getCompanyNames());
+            campaignCompanyService.associateCampaignWithCompanies(campaign.getId(), companyIds);
+        }
+        
+        // Save the updated campaign
+        campaign = campaignRepository.save(campaign);
+        
+        log.info("Updated campaign: {}", campaign.getId());
+    } else {
+        // Create new campaign (existing code)
+        campaign = new CampaignMapping();
+        // Set basic properties
+        campaign.setName(request.getName());
+        campaign.setBannerId(request.getBannerId());
+        campaign.setInsightType(request.getInsightType());
+        campaign.setInsightSubType(request.getInsightSubType());
+        campaign.setInsight(request.getInsight());
+        campaign.setEligibleCompanies(request.getEligibleCompanies());
+        campaign.setEligibleUsers(request.getEligibleUsers());
     }
+    
+    // Map to DTO and return
+    CampaignResponseDTO responseDTO = mapToDTO(campaign);
+    
+    // Ensure company names are included in response
+    List<String> companies = campaignCompanyService.getCompaniesForCampaign(campaign.getId());
+    responseDTO.setCompanyNames(String.join("|", companies));
+    
+    return responseDTO;
+}
     
     /**
      * Determine the status and campaign steps based on the action

@@ -1,7 +1,9 @@
 package com.usbank.corp.dcr.api.service;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,24 +32,30 @@ public class CampaignCompanyService {
      * @param campaignId Campaign ID
      * @param companyIds List of company IDs
      */
-    @Transactional
-    public void associateCampaignWithCompanies(String campaignId, List<String> companyIds) {
-        // Delete any existing mappings
-        campaignCompanyRepository.deleteByCampaignId(campaignId);
-        
-        // Create new mappings
-        List<CampaignCompanyMapping> mappings = new ArrayList<>();
-        
-        for (String companyId : companyIds) {
-            CampaignCompanyMapping mapping = new CampaignCompanyMapping();
-            mapping.setCampaignId(campaignId);
-            mapping.setCompanyId(companyId);
-            mappings.add(mapping);
-        }
-        
-        campaignCompanyRepository.saveAll(mappings);
+// In CampaignCompanyService
+
+@Transactional
+public void associateCampaignWithCompanies(String campaignId, List<String> companyIds) {
+    // Delete any existing mappings first to avoid conflicts
+    campaignCompanyRepository.deleteByCampaignId(campaignId);
+    
+    // Use a Set to ensure we don't have duplicate companies
+    Set<String> uniqueCompanyIds = new HashSet<>(companyIds);
+    
+    List<CampaignCompanyMapping> mappings = new ArrayList<>();
+    
+    for (String companyId : uniqueCompanyIds) {
+        CampaignCompanyMapping mapping = new CampaignCompanyMapping();
+        mapping.setCampaignId(campaignId);
+        mapping.setCompanyId(companyId);
+        mappings.add(mapping);
     }
     
+    // Save all at once
+    campaignCompanyRepository.saveAll(mappings);
+    
+    log.info("Associated campaign {} with {} companies", campaignId, mappings.size());
+}
     /**
      * Get all companies associated with a campaign
      * 
