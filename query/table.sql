@@ -9,12 +9,14 @@ IF OBJECT_ID('[dbo].[campaign_company_mapping]', 'U') IS NOT NULL
 
 -- 1. Make sure the campaigns table has the right primary key
 IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS 
-    WHERE CONSTRAINT_TYPE = 'PRIMARY KEY' AND TABLE_NAME = 'campaigns_dev_rotation1')
-    ALTER TABLE [dbo].[campaigns_dev_rotation1] DROP CONSTRAINT PK_campaigns_dev_rotation1;
+    WHERE CONSTRAINT_TYPE = 'PRIMARY KEY' AND TABLE_NAME = 'campaigns')
+    ALTER TABLE [dbo].[campaigns] DROP CONSTRAINT PK_campaigns;
 
 -- Add primary key if needed
-ALTER TABLE [dbo].[campaigns_dev_rotation1] 
-ADD CONSTRAINT PK_campaigns_dev_rotation1 PRIMARY KEY (id);
+IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS 
+    WHERE CONSTRAINT_TYPE = 'PRIMARY KEY' AND TABLE_NAME = 'campaigns')
+    ALTER TABLE [dbo].[campaigns] 
+    ADD CONSTRAINT PK_campaigns PRIMARY KEY (id);
 
 -- 2. Create new mapping table with proper foreign key
 CREATE TABLE [dbo].[campaign_company_mapping] (
@@ -23,7 +25,7 @@ CREATE TABLE [dbo].[campaign_company_mapping] (
     [company_id] VARCHAR(100) NOT NULL,
     CONSTRAINT [uk_campaign_company] UNIQUE ([campaign_id], [company_id]),
     CONSTRAINT [FK_campaign] FOREIGN KEY ([campaign_id]) 
-        REFERENCES [dbo].[campaigns_dev_rotation1] ([id]) 
+        REFERENCES [dbo].[campaigns] ([id]) 
         ON DELETE CASCADE
 );
 

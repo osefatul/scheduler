@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,36 +32,52 @@ public class CampaignCompanyService {
      * Associate a campaign with multiple companies
      * This is now a new, separate transaction
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void associateCampaignWithCompanies(String campaignId, List<String> companyIds) {
-        log.info("Associating campaign {} with companies: {}", campaignId, companyIds);
+    @Transactional
+public void associateCampaignWithCompanies(String campaignId, List<String> companyIds) {
+    log.info("Associating campaign {} with companies: {}", campaignId, companyIds);
+    
+    try {
+        // First, get existing mappings
+        List<CampaignCompanyMapping> existingMappings = campaignCompanyRepository.findByCampaignId(campaignId);
         
-        try {
-            // Delete any existing mappings first
-            campaignCompanyRepository.deleteByCampaignId(campaignId);
-            
-            // Use a Set to ensure we don't have duplicate companies
-            Set<String> uniqueCompanyIds = new HashSet<>(companyIds);
-            
-            List<CampaignCompanyMapping> mappings = new ArrayList<>();
-            
-            for (String companyId : uniqueCompanyIds) {
+        // Extract the existing company IDs
+        Set<String> existingCompanyIds = existingMappings.stream()
+                .map(CampaignCompanyMapping::getCompanyId)
+                .collect(Collectors.toSet());
+        
+        // Use a Set to ensure we don't have duplicate companies
+        Set<String> uniqueCompanyIds = new HashSet<>(companyIds);
+        
+        // Remove mappings for companies that are no longer in the list
+        for (CampaignCompanyMapping mapping : existingMappings) {
+            if (!uniqueCompanyIds.contains(mapping.getCompanyId())) {
+                campaignCompanyRepository.delete(mapping);
+            }
+        }
+        
+        // Add mappings for companies that are not already mapped
+        List<CampaignCompanyMapping> newMappings = new ArrayList<>();
+        for (String companyId : uniqueCompanyIds) {
+            if (!existingCompanyIds.contains(companyId)) {
                 CampaignCompanyMapping mapping = new CampaignCompanyMapping();
-                mapping.setId(UUID.randomUUID().toString()); // Generate a unique ID
+                mapping.setId(UUID.randomUUID().toString());
                 mapping.setCampaignId(campaignId);
                 mapping.setCompanyId(companyId);
-                mappings.add(mapping);
+                newMappings.add(mapping);
             }
-            
-            // Save all at once
-            campaignCompanyRepository.saveAll(mappings);
-            
-            log.info("Successfully associated campaign {} with {} companies", campaignId, mappings.size());
-        } catch (Exception e) {
-            log.error("Error associating campaign {} with companies: {}", campaignId, e.getMessage(), e);
-            throw e;
         }
+        
+        // Save all new mappings
+        if (!newMappings.isEmpty()) {
+            campaignCompanyRepository.saveAll(newMappings);
+        }
+        
+        log.info("Successfully updated associations for campaign {}", campaignId);
+    } catch (Exception e) {
+        log.error("Error associating campaign {} with companies: {}", campaignId, e.getMessage(), e);
+        throw e;
     }
+}
     
     /**
      * Get all companies associated with a campaign
