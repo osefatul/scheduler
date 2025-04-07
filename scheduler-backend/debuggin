@@ -1,6 +1,6 @@
 /**
  * Emergency backup method to update campaign using direct JDBC
- * This bypasses all JPA/Hibernate issues
+ * This bypasses all JPA/Hibernate issues and reduces frequency and display capping
  */
  @Autowired
  private JdbcTemplate jdbcTemplate;
@@ -9,19 +9,65 @@
      try {
          log.info("Attempting emergency direct JDBC update for campaign ID: {}", campaignId);
          
-         // Very basic update - just set visibility to VISIBLE
-         String sql = "UPDATE campaigns SET visibility = 'VISIBLE', updated_date = ? WHERE id = ?";
+         // First, get the current values from the database
+         String selectSql = "SELECT frequency_per_week, display_capping, original_frequency_per_week FROM campaigns WHERE id = ?";
          
-         int rows = jdbcTemplate.update(sql, new Timestamp(currentDate.getTime()), campaignId);
+         Map<String, Object> currentValues = jdbcTemplate.queryForMap(selectSql, campaignId);
          
-         log.info("Emergency update affected {} rows", rows);
+         Integer frequencyPerWeek = (Integer) currentValues.get("frequency_per_week");
+         Integer displayCapping = (Integer) currentValues.get("display_capping");
+         Integer originalFrequency = (Integer) currentValues.get("original_frequency_per_week");
+         
+         // Decrement counters safely
+         Integer newFrequency = frequencyPerWeek != null ? Math.max(0, frequencyPerWeek - 1) : null;
+         Integer newCapping = displayCapping != null ? Math.max(0, displayCapping - 1) : null;
+         
+         // Determine visibility
+         String visibility = (newCapping != null && newCapping <= 0) ? "COMPLETED" : "VISIBLE";
+         
+         // Determine rotation status
+         String rotationStatus = null;
+         if (newFrequency != null && newCapping != null && newFrequency <= 0 && newCapping > 0) {
+             rotationStatus = "ROTATED_RECENTLY";
+         }
+         
+         // If original frequency is not set but we have a current frequency value, set it
+         if (originalFrequency == null && frequencyPerWeek != null) {
+             jdbcTemplate.update(
+                 "UPDATE campaigns SET original_frequency_per_week = ? WHERE id = ?",
+                 frequencyPerWeek, campaignId
+             );
+         }
+         
+         // Update all relevant fields in one transaction
+         String updateSql = "UPDATE campaigns SET " +
+                 "frequency_per_week = ?, " +
+                 "display_capping = ?, " +
+                 "visibility = ?, " +
+                 "rotation_status = ?, " +
+                 "updated_date = ?, " +
+                 "requested_date = ? " +
+                 "WHERE id = ?";
+         
+         int rows = jdbcTemplate.update(
+             updateSql, 
+             newFrequency, 
+             newCapping, 
+             visibility, 
+             rotationStatus, 
+             new Timestamp(currentDate.getTime()), 
+             new Timestamp(currentDate.getTime()), 
+             campaignId
+         );
+         
+         log.info("Emergency update affected {} rows. New frequency: {}, new capping: {}, visibility: {}", 
+                 rows, newFrequency, newCapping, visibility);
          return rows > 0;
      } catch (Exception e) {
          log.error("Emergency update failed: {}", e.getMessage(), e);
          return false;
      }
  }
-
 
 
 
@@ -94,3 +140,6 @@ private JdbcTemplate jdbcTemplate;
 // Skip update entirely for testing
 CampaignMapping selectedCampaign = selectNextCampaignForRotation(eligibleCampaigns, currentDate);
 return campaignService.mapToDTOWithCompanies(selectedCampaign);
+
+
+
