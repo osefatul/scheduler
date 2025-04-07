@@ -1,29 +1,96 @@
-private void updateCampaignAfterSelection(CampaignMapping campaign, Date currentDate) {
-  try {
-      log.info("Starting update for campaign ID: {}", campaign.getId());
-      
-      // Get a fresh copy of the campaign from the database
-      CampaignMapping freshCampaign = campaignRepository.findById(campaign.getId())
-              .orElseThrow(() -> new RuntimeException("Campaign not found: " + campaign.getId()));
-      
-      // Set only the essential fields
-      if (freshCampaign.getFrequencyPerWeek() != null) {
-          freshCampaign.setFrequencyPerWeek(Math.max(0, freshCampaign.getFrequencyPerWeek() - 1));
-      }
-      
-      if (freshCampaign.getDisplayCapping() != null) {
-          freshCampaign.setDisplayCapping(Math.max(0, freshCampaign.getDisplayCapping() - 1));
-      }
-      
-      freshCampaign.setUpdatedDate(currentDate);
-      freshCampaign.setVisibility("VISIBLE");
-      
-      // Save the fresh campaign
-      campaignRepository.save(freshCampaign);
-      log.info("Campaign updated successfully");
-      
-  } catch (Exception e) {
-      log.error("Error updating campaign: {}", e.getMessage(), e);
-      // Don't throw the exception - let the process continue
-  }
+/**
+ * Emergency backup method to update campaign using direct JDBC
+ * This bypasses all JPA/Hibernate issues
+ */
+ @Autowired
+ private JdbcTemplate jdbcTemplate;
+ 
+ private boolean emergencyUpdateCampaign(String campaignId, Date currentDate) {
+     try {
+         log.info("Attempting emergency direct JDBC update for campaign ID: {}", campaignId);
+         
+         // Very basic update - just set visibility to VISIBLE
+         String sql = "UPDATE campaigns SET visibility = 'VISIBLE', updated_date = ? WHERE id = ?";
+         
+         int rows = jdbcTemplate.update(sql, new Timestamp(currentDate.getTime()), campaignId);
+         
+         log.info("Emergency update affected {} rows", rows);
+         return rows > 0;
+     } catch (Exception e) {
+         log.error("Emergency update failed: {}", e.getMessage(), e);
+         return false;
+     }
+ }
+
+
+
+
+
+
+
+
+ @Transactional
+public CampaignResponseDTO getNextEligibleCampaign(String requestDate, String companyId) 
+        throws DataHandlingException {
+    try {
+        // Convert date format
+        String formattedDate = rotationUtils.convertDate(requestDate);
+        Date currentDate = rotationUtils.getinDate(formattedDate);
+        
+        // Get all eligible campaigns for the company using the join query
+        List<CampaignMapping> eligibleCampaigns = campaignRepository
+                .getEligibleCampaignsForCompany(formattedDate, companyId);
+        
+        if (eligibleCampaigns.isEmpty()) {
+            throw new DataHandlingException(HttpStatus.OK.toString(),
+                    "No eligible campaigns found for the company");
+        }
+        
+        log.info("Found {} eligible campaigns for company {} on date {}", 
+                eligibleCampaigns.size(), companyId, formattedDate);
+        
+        // Apply rotation logic to select the next campaign
+        CampaignMapping selectedCampaign = selectNextCampaignForRotation(eligibleCampaigns, currentDate);
+        
+        // Try emergency update
+        emergencyUpdateCampaign(selectedCampaign.getId(), currentDate);
+        
+        // Get a fresh copy of the campaign
+        CampaignMapping refreshedCampaign = campaignRepository.findById(selectedCampaign.getId())
+                .orElse(selectedCampaign);
+        
+        // Generate response DTO
+        return campaignService.mapToDTOWithCompanies(refreshedCampaign);
+    } catch (DataHandlingException e) {
+        throw e;
+    } catch (Exception e) {
+        log.error("Unexpected error in getNextEligibleCampaign: {}", e.getMessage(), e);
+        throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
+                "Unexpected error: " + e.getMessage());
+    }
 }
+
+
+
+
+
+
+
+
+
+
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import java.sql.Timestamp;
+
+// Then in your class
+@Autowired
+private JdbcTemplate jdbcTemplate;
+
+
+
+
+
+// Skip update entirely for testing
+CampaignMapping selectedCampaign = selectNextCampaignForRotation(eligibleCampaigns, currentDate);
+return campaignService.mapToDTOWithCompanies(selectedCampaign);
