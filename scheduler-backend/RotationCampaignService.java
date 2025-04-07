@@ -49,41 +49,63 @@ public class RotationCampaignService {
     @Transactional
     public CampaignResponseDTO getNextEligibleCampaign(String requestDate, String companyId) 
             throws DataHandlingException {
-        
-        // Convert date format
-        String formattedDate = rotationUtils.convertDate(requestDate);
-        Date currentDate = rotationUtils.getinDate(formattedDate);
-        
-        // Get all eligible campaigns for the company using the join query
-        List<CampaignMapping> eligibleCampaigns = campaignRepository
-                .getEligibleCampaignsForCompany(formattedDate, companyId);
-        
-        if (eligibleCampaigns.isEmpty()) {
-            throw new DataHandlingException(HttpStatus.OK.toString(),
-                    "No eligible campaigns found for the company");
+        try {
+            // Convert date format
+            String formattedDate = rotationUtils.convertDate(requestDate);
+            Date currentDate = rotationUtils.getinDate(formattedDate);
+            
+            // Get all eligible campaigns for the company using the join query
+            List<CampaignMapping> eligibleCampaigns = campaignRepository
+                    .getEligibleCampaignsForCompany(formattedDate, companyId);
+            
+            if (eligibleCampaigns.isEmpty()) {
+                throw new DataHandlingException(HttpStatus.OK.toString(),
+                        "No eligible campaigns found for the company");
+            }
+            
+            log.info("Found {} eligible campaigns for company {} on date {}", 
+                    eligibleCampaigns.size(), companyId, formattedDate);
+            
+            // For each campaign, check if it needs frequency reset for the current week
+            resetWeeklyFrequenciesIfNeeded(eligibleCampaigns, currentDate);
+            
+            // Filter campaigns that still have available frequency this week
+            List<CampaignMapping> availableThisWeek = eligibleCampaigns.stream()
+                    .filter(campaign -> {
+                        Integer frequency = campaign.getFrequencyPerWeek();
+                        Integer capping = campaign.getDisplayCapping();
+                        return (frequency != null && frequency > 0) && (capping != null && capping > 0);
+                    })
+                    .toList();
+            
+            if (availableThisWeek.isEmpty()) {
+                throw new DataHandlingException(HttpStatus.OK.toString(),
+                        "No campaigns available for display this week");
+            }
+            
+            // Apply rotation logic to select the next campaign
+            CampaignMapping selectedCampaign = selectNextCampaignForRotation(availableThisWeek, currentDate);
+            
+            // Update the selected campaign's counters and status
+            boolean updateSuccess = updateCampaignAfterSelection(selectedCampaign, currentDate);
+            
+            if (!updateSuccess) {
+                log.warn("Failed to update campaign, returning original state");
+            }
+            
+            // Get a fresh copy of the campaign from the database to ensure we have the latest state
+            CampaignMapping refreshedCampaign = campaignRepository.findById(selectedCampaign.getId())
+                    .orElse(selectedCampaign);
+            
+            // Generate response DTO with company information
+            return campaignService.mapToDTOWithCompanies(refreshedCampaign);
+        } catch (DataHandlingException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Unexpected error in getNextEligibleCampaign: {}", e.getMessage(), e);
+            throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
+                    "Unexpected error: " + e.getMessage());
         }
-        
-        // For each campaign, check if it needs frequency reset for the current week
-        resetWeeklyFrequenciesIfNeeded(eligibleCampaigns, currentDate);
-        
-        // Filter campaigns that still have available frequency this week
-        List<CampaignMapping> availableThisWeek = eligibleCampaigns.stream()
-                .filter(campaign -> campaign.getFrequencyPerWeek() > 0 && campaign.getDisplayCapping() > 0)
-                .toList();
-        
-        if (availableThisWeek.isEmpty()) {
-            throw new DataHandlingException(HttpStatus.OK.toString(),
-                    "No campaigns available for display this week");
-        }
-        
-        // Apply rotation logic to select the next campaign
-        CampaignMapping selectedCampaign = selectNextCampaignForRotation(availableThisWeek, currentDate);
-        
-        // Update the selected campaign's counters and status
-        updateCampaignAfterSelection(selectedCampaign, currentDate);
-        
-        // Generate response DTO with company information
-        return campaignService.mapToDTOWithCompanies(selectedCampaign);
     }
     
     /**
@@ -139,7 +161,12 @@ public class RotationCampaignService {
                 log.info("Resetting weekly frequency for campaign {}", campaign.getId());
                 campaign.setFrequencyPerWeek(campaign.getOrginalFrequencyPerWeek());
                 campaign.setRotation_status(null); // Clear rotation status
-                campaignRepository.save(campaign);
+                try {
+                    campaignRepository.save(campaign);
+                } catch (Exception e) {
+                    log.error("Error resetting frequency for campaign {}: {}", campaign.getId(), e.getMessage());
+                    // Continue with other campaigns
+                }
             }
         }
     }
@@ -162,17 +189,20 @@ public class RotationCampaignService {
         log.info("Selecting campaign for week number: {} of year", weekNumber);
         
         // Sort campaigns by creation date (oldest first)
-        campaigns.sort((c1, c2) -> c1.getCreatedDate().compareTo(c2.getCreatedDate()));
+        campaigns.sort((c1, c2) -> {
+            if (c1.getCreatedDate() == null && c2.getCreatedDate() == null) return 0;
+            if (c1.getCreatedDate() == null) return -1;
+            if (c2.getCreatedDate() == null) return 1;
+            return c1.getCreatedDate().compareTo(c2.getCreatedDate());
+        });
+        
+        // Make sure weekNumber is positive for the modulo operation
+        int adjustedWeekNumber = weekNumber > 0 ? weekNumber : 1;
         
         // Determine which campaign should be shown this week based on rotation
         // Campaign index = (weekNumber - 1) % total campaigns
         // This ensures campaign 0 (oldest) shows in week 1, campaign 1 in week 2, etc.
-        int campaignIndex = (weekNumber - 1) % campaigns.size();
-        
-        // Ensure index is within bounds (defensive programming)
-        if (campaignIndex < 0) {
-            campaignIndex = 0;
-        }
+        int campaignIndex = (adjustedWeekNumber - 1) % campaigns.size();
         
         CampaignMapping selectedCampaign = campaigns.get(campaignIndex);
         log.info("Selected campaign {} (index {}) for rotation in week {}", 
@@ -182,51 +212,64 @@ public class RotationCampaignService {
     }
     
     /**
-     * Update campaign after selection for display
+     * Update campaign after selection for display using native SQL
+     * This avoids potential ORM/entity manager issues
      * 
      * @param campaign Selected campaign
      * @param currentDate Current date
+     * @return true if update was successful, false otherwise
      */
-    private void updateCampaignAfterSelection(CampaignMapping campaign, Date currentDate) {
+    private boolean updateCampaignAfterSelection(CampaignMapping campaign, Date currentDate) {
         try {
             // Back up original frequency if not already done
-            if (campaign.getOrginalFrequencyPerWeek() == null && campaign.getFrequencyPerWeek() != null) {
-                campaign.setOrginalFrequencyPerWeek(campaign.getFrequencyPerWeek());
+            Integer originalFrequency = campaign.getOrginalFrequencyPerWeek();
+            Integer currentFrequency = campaign.getFrequencyPerWeek();
+            
+            if (originalFrequency == null && currentFrequency != null) {
+                // Update original frequency in a separate transaction
+                campaignRepository.updateOriginalFrequency(campaign.getId(), currentFrequency);
+                log.info("Updated original frequency to {} for campaign {}", currentFrequency, campaign.getId());
             }
             
             // Decrement counters safely
-            int currentFrequency = campaign.getFrequencyPerWeek() != null ? campaign.getFrequencyPerWeek() : 0;
-            int currentCapping = campaign.getDisplayCapping() != null ? campaign.getDisplayCapping() : 0;
-            
-            campaign.setFrequencyPerWeek(Math.max(0, currentFrequency - 1));
-            campaign.setDisplayCapping(Math.max(0, currentCapping - 1));
-            
-            // Update timestamps
-            campaign.setUpdatedDate(currentDate);
-            campaign.setRequested_date(currentDate);
-            campaign.setStart_week_of_requested_date(rotationUtils.getWeekStartDate(currentDate));
-            
-            // Update visibility
-            int displayCapping = campaign.getDisplayCapping() != null ? campaign.getDisplayCapping() : 0;
-            String visibility = displayCapping <= 0 ? "COMPLETED" : "VISIBLE";
-            campaign.setVisibility(visibility);
-            
-            // Set rotation status if weekly frequency is exhausted
-            int frequencyPerWeek = campaign.getFrequencyPerWeek() != null ? campaign.getFrequencyPerWeek() : 0;
-            if (frequencyPerWeek <= 0 && displayCapping > 0) {
-                campaign.setRotation_status("ROTATED_RECENTLY");
-            } else {
-                campaign.setRotation_status(null);
+            Integer newFrequency = null;
+            if (currentFrequency != null) {
+                newFrequency = Math.max(0, currentFrequency - 1);
             }
             
-            // Save updated campaign
-            campaignRepository.save(campaign);
+            Integer currentCapping = campaign.getDisplayCapping();
+            Integer newCapping = null;
+            if (currentCapping != null) {
+                newCapping = Math.max(0, currentCapping - 1);
+            }
             
-            log.info("Updated campaign after selection: id={}, frequencyPerWeek={}, displayCapping={}, visibility={}", 
-                    campaign.getId(), campaign.getFrequencyPerWeek(), campaign.getDisplayCapping(), campaign.getVisibility());
+            // Determine visibility
+            String visibility = (newCapping != null && newCapping <= 0) ? "COMPLETED" : "VISIBLE";
+            
+            // Determine rotation status
+            String rotationStatus = null;
+            if (newFrequency != null && newCapping != null && newFrequency <= 0 && newCapping > 0) {
+                rotationStatus = "ROTATED_RECENTLY";
+            }
+            
+            // Update using native query
+            Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+            int rows = campaignRepository.updateCampaignAfterSelection(
+                    campaign.getId(), 
+                    newFrequency, 
+                    newCapping, 
+                    currentDate, 
+                    currentDate, 
+                    weekStartDate, 
+                    visibility, 
+                    rotationStatus);
+            
+            log.info("Updated {} rows for campaign {}", rows, campaign.getId());
+            
+            return rows > 0;
         } catch (Exception e) {
             log.error("Error updating campaign after selection: {}", e.getMessage(), e);
-            throw e; // Re-throw to maintain transaction behavior
+            return false;
         }
     }
 }
