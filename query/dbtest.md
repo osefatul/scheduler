@@ -71,3 +71,48 @@ UPDATE campaigns
 SET original_frequency_per_week = 2
 WHERE id = '<campaign_id>'
   AND original_frequency_per_week IS NULL;
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- new table..... -->
+
+  -- Create the company_campaign_tracker table
+CREATE TABLE company_campaign_tracker (
+    id VARCHAR(36) PRIMARY KEY,
+    company_id VARCHAR(255) NOT NULL,
+    campaign_id VARCHAR(255) NOT NULL,
+    remaining_weekly_frequency INT,
+    original_weekly_frequency INT,
+    remaining_display_cap INT,
+    last_updated DATETIME,
+    last_week_reset DATETIME,
+    rotation_status VARCHAR(50),
+    CONSTRAINT unique_company_campaign UNIQUE (company_id, campaign_id)
+);
+
+-- Add indexes for better performance
+CREATE INDEX idx_cct_company ON company_campaign_tracker (company_id);
+CREATE INDEX idx_cct_campaign ON company_campaign_tracker (campaign_id);
+CREATE INDEX idx_cct_last_week_reset ON company_campaign_tracker (last_week_reset);
+
+-- Add foreign key constraints if needed
+ALTER TABLE company_campaign_tracker 
+    ADD CONSTRAINT fk_cct_campaign 
+    FOREIGN KEY (campaign_id) 
+    REFERENCES campaigns(id);
+
+-- You may need to modify the following if your company table has a different name
+-- ALTER TABLE company_campaign_tracker 
+--     ADD CONSTRAINT fk_cct_company 
+--     FOREIGN KEY (company_id) 
+--     REFERENCES companies(id);
