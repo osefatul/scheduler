@@ -110,20 +110,35 @@ public class CompanyCampaignTrackerService {
         
         CompanyCampaignTracker tracker = trackerOpt.get();
         
-        // Check if eligible and apply view
-        if (tracker.applyView(currentDate)) {
-            trackerRepository.save(tracker);
+        // Check eligibility (both frequency and display cap must be available)
+        if (tracker.getRemainingWeeklyFrequency() == null || 
+            tracker.getRemainingWeeklyFrequency() <= 0 ||
+            tracker.getRemainingDisplayCap() == null || 
+            tracker.getRemainingDisplayCap() <= 0) {
             
-            log.info("Applied view for company {}, campaign {}. New frequency: {}, new cap: {}", 
-                    companyId, campaignId, 
-                    tracker.getRemainingWeeklyFrequency(), 
+            log.info("Campaign {} not eligible for company {}: freq={}, cap={}", 
+                    campaignId, companyId, 
+                    tracker.getRemainingWeeklyFrequency(),
                     tracker.getRemainingDisplayCap());
-            
-            return true;
-        } else {
-            log.info("Company {}, campaign {} not eligible for view", companyId, campaignId);
             return false;
         }
+        
+        // Decrement counters
+        tracker.setRemainingWeeklyFrequency(tracker.getRemainingWeeklyFrequency() - 1);
+        tracker.setRemainingDisplayCap(tracker.getRemainingDisplayCap() - 1);
+        tracker.setLastUpdated(currentDate);
+        
+        // If display cap is exhausted, this campaign won't be shown again
+        // If weekly frequency is exhausted, this campaign won't be shown again this week
+        
+        trackerRepository.save(tracker);
+        
+        log.info("Applied view for company {}, campaign {}. New freq: {}, new cap: {}", 
+                companyId, campaignId, 
+                tracker.getRemainingWeeklyFrequency(), 
+                tracker.getRemainingDisplayCap());
+        
+        return true;
     }
     
     /**
