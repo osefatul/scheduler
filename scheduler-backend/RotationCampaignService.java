@@ -188,38 +188,45 @@ public class RotationCampaignService {
      * @param currentDate Current date
      */
     private void updateCampaignAfterSelection(CampaignMapping campaign, Date currentDate) {
-        // Back up original frequency if not already done
-        if (campaign.getOrginalFrequencyPerWeek() == null) {
-            campaign.setOrginalFrequencyPerWeek(campaign.getFrequencyPerWeek());
+        try {
+            // Back up original frequency if not already done
+            if (campaign.getOrginalFrequencyPerWeek() == null && campaign.getFrequencyPerWeek() != null) {
+                campaign.setOrginalFrequencyPerWeek(campaign.getFrequencyPerWeek());
+            }
+            
+            // Decrement counters safely
+            int currentFrequency = campaign.getFrequencyPerWeek() != null ? campaign.getFrequencyPerWeek() : 0;
+            int currentCapping = campaign.getDisplayCapping() != null ? campaign.getDisplayCapping() : 0;
+            
+            campaign.setFrequencyPerWeek(Math.max(0, currentFrequency - 1));
+            campaign.setDisplayCapping(Math.max(0, currentCapping - 1));
+            
+            // Update timestamps
+            campaign.setUpdatedDate(currentDate);
+            campaign.setRequested_date(currentDate);
+            campaign.setStart_week_of_requested_date(rotationUtils.getWeekStartDate(currentDate));
+            
+            // Update visibility
+            int displayCapping = campaign.getDisplayCapping() != null ? campaign.getDisplayCapping() : 0;
+            String visibility = displayCapping <= 0 ? "COMPLETED" : "VISIBLE";
+            campaign.setVisibility(visibility);
+            
+            // Set rotation status if weekly frequency is exhausted
+            int frequencyPerWeek = campaign.getFrequencyPerWeek() != null ? campaign.getFrequencyPerWeek() : 0;
+            if (frequencyPerWeek <= 0 && displayCapping > 0) {
+                campaign.setRotation_status("ROTATED_RECENTLY");
+            } else {
+                campaign.setRotation_status(null);
+            }
+            
+            // Save updated campaign
+            campaignRepository.save(campaign);
+            
+            log.info("Updated campaign after selection: id={}, frequencyPerWeek={}, displayCapping={}, visibility={}", 
+                    campaign.getId(), campaign.getFrequencyPerWeek(), campaign.getDisplayCapping(), campaign.getVisibility());
+        } catch (Exception e) {
+            log.error("Error updating campaign after selection: {}", e.getMessage(), e);
+            throw e; // Re-throw to maintain transaction behavior
         }
-        
-        // Decrement counters
-        campaign.setFrequencyPerWeek(campaign.getFrequencyPerWeek() - 1);
-        campaign.setDisplayCapping(campaign.getDisplayCapping() - 1);
-        
-        // Update timestamps
-        campaign.setUpdatedDate(currentDate);
-        campaign.setRequested_date(currentDate);
-        campaign.setStart_week_of_requested_date(rotationUtils.getWeekStartDate(currentDate));
-        
-        // Update visibility
-        String visibility = campaign.getDisplayCapping() <= 0 ? "COMPLETED" : "VISIBLE";
-        campaign.setVisibility(visibility);
-        
-        // Set rotation status if weekly frequency is exhausted
-        if (campaign.getFrequencyPerWeek() <= 0 && campaign.getDisplayCapping() > 0) {
-            campaign.setRotation_status("ROTATED_RECENTLY");
-        } else {
-            campaign.setRotation_status(null);
-        }
-        
-        // Maintain campaign status and steps - don't modify these fields
-        // as they are managed by the multi-step form process
-        
-        // Save updated campaign
-        campaignRepository.save(campaign);
-        
-        log.info("Updated campaign after selection: id={}, frequencyPerWeek={}, displayCapping={}, visibility={}", 
-                campaign.getId(), campaign.getFrequencyPerWeek(), campaign.getDisplayCapping(), campaign.getVisibility());
     }
 }
