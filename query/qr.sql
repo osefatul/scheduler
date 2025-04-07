@@ -1,92 +1,67 @@
 SELECT
     [Insight Type],
     [Insight Sub Type],
-    [Insight] AS OriginalInsight,
     CASE 
-        WHEN [Insight] LIKE '%already uses FX%' THEN
+        WHEN [Insight] LIKE 'While %' THEN
             REPLACE(
                 REPLACE(
                     REPLACE(
                         REPLACE(
-                            [Insight],
-                            -- Company name replacement - handles the first word up to the first space
-                            LEFT([Insight], CHARINDEX(' ', [Insight] + ' ') - 1), 
-                            'Company'
+                            REPLACE(
+                                [Insight],
+                                SUBSTRING([Insight], 1, CHARINDEX(' already uses FX', [Insight]) - 1),
+                                '[Company]'
+                            ),
+                            SUBSTRING([Insight], CHARINDEX(' amounting to', [Insight]) + 12, 
+                                     CHARINDEX(' (TTM)', [Insight]) - CHARINDEX(' amounting to', [Insight]) - 12),
+                            '[Amount]'
                         ),
-                        -- Amount replacement - safer extraction
-                        CASE WHEN CHARINDEX('amounting to', [Insight]) > 0 
-                             THEN SUBSTRING([Insight], 
-                                  CHARINDEX('amounting to', [Insight]), 
-                                  CASE WHEN CHARINDEX('(', [Insight], CHARINDEX('amounting to', [Insight])) > 0
-                                       THEN CHARINDEX('(', [Insight], CHARINDEX('amounting to', [Insight])) - CHARINDEX('amounting to', [Insight])
-                                       ELSE LEN([Insight]) END)
-                             ELSE '' END,
-                        'Amount'
+                        SUBSTRING([Insight], CHARINDEX(' in ', [Insight]) + 4, 
+                                 CHARINDEX(' countries', [Insight]) - CHARINDEX(' in ', [Insight]) - 4),
+                        '[Countries]'
                     ),
-                    -- Countries replacement - safer extraction
-                    CASE WHEN CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight])) > 0
-                         THEN SUBSTRING([Insight],
-                              CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight])),
-                              CASE WHEN CHARINDEX('(', [Insight], CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight]))) > 0
-                                   THEN CHARINDEX('(', [Insight], CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight]))) - CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight]))
-                                   ELSE LEN([Insight]) END)
-                         ELSE '' END,
-                    'Countries'
+                    SUBSTRING([Insight], CHARINDEX(' made in ', [Insight]) + 8, 
+                             CHARINDEX(' currency', [Insight]) - CHARINDEX(' made in ', [Insight]) - 8),
+                    '[Currency]'
                 ),
-                -- Currency replacement - safer extraction
-                CASE WHEN CHARINDEX('made in ', [Insight]) > 0
-                     THEN SUBSTRING([Insight],
-                          CHARINDEX('made in ', [Insight]),
-                          CASE WHEN CHARINDEX('(', [Insight], CHARINDEX('made in ', [Insight])) > 0
-                               THEN CHARINDEX('(', [Insight], CHARINDEX('made in ', [Insight])) - CHARINDEX('made in ', [Insight])
-                               ELSE LEN([Insight]) END)
-                     ELSE '' END,
-                'Currency'
+                -- This replaces additional company names in the same insight
+                CASE 
+                    WHEN [Insight] LIKE '%could have used USB FX services%' 
+                    THEN REPLACE([Insight], 
+                        SUBSTRING([Insight], 
+                            CHARINDEX(' could have used USB FX services', [Insight]) - LEN(
+                                SUBSTRING([Insight], 1, 
+                                    CHARINDEX(' could have used USB FX services', [Insight]) - 1)
+                            ),
+                            LEN(
+                                SUBSTRING([Insight], 1, 
+                                    CHARINDEX(' could have used USB FX services', [Insight]) - 1)
+                            )
+                        ),
+                        '[Company]'
+                    )
+                    ELSE [Insight]
+                END
             )
-        WHEN [Insight] LIKE '%could have used USD FX services%' THEN
+        WHEN [Insight] LIKE '%could have used USB FX services%' THEN
             REPLACE(
                 REPLACE(
                     REPLACE(
-                        REPLACE(
-                            [Insight],
-                            -- Company name replacement - handles the first word up to the first space
-                            LEFT([Insight], CHARINDEX(' ', [Insight] + ' ') - 1),
-                            'Company'
-                        ),
-                        -- Amount replacement - safer extraction
-                        CASE WHEN CHARINDEX('amounting to', [Insight]) > 0 
-                             THEN SUBSTRING([Insight], 
-                                  CHARINDEX('amounting to', [Insight]), 
-                                  CASE WHEN CHARINDEX('(', [Insight], CHARINDEX('amounting to', [Insight])) > 0
-                                       THEN CHARINDEX('(', [Insight], CHARINDEX('amounting to', [Insight])) - CHARINDEX('amounting to', [Insight])
-                                       ELSE LEN([Insight]) END)
-                             ELSE '' END,
-                        'Amount'
+                        [Insight],
+                        SUBSTRING([Insight], 1, CHARINDEX(' could have used USB FX services', [Insight]) - 1),
+                        '[Company]'
                     ),
-                    -- Countries replacement - safer extraction
-                    CASE WHEN CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight])) > 0
-                         THEN SUBSTRING([Insight],
-                              CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight])),
-                              CASE WHEN CHARINDEX('(', [Insight], CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight]))) > 0
-                                   THEN CHARINDEX('(', [Insight], CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight]))) - CHARINDEX('in ', [Insight], CHARINDEX('(', [Insight]))
-                                   ELSE LEN([Insight]) END)
-                         ELSE '' END,
-                    'Countries'
+                    SUBSTRING([Insight], CHARINDEX(' amounting to', [Insight]) + 12, 
+                             CHARINDEX(' (TTM)', [Insight]) - CHARINDEX(' amounting to', [Insight]) - 12),
+                    '[Amount]'
                 ),
-                -- Currency replacement - safer extraction
-                CASE WHEN CHARINDEX('made in ', [Insight]) > 0
-                     THEN SUBSTRING([Insight],
-                          CHARINDEX('made in ', [Insight]),
-                          CASE WHEN CHARINDEX('(', [Insight], CHARINDEX('made in ', [Insight])) > 0
-                               THEN CHARINDEX('(', [Insight], CHARINDEX('made in ', [Insight])) - CHARINDEX('made in ', [Insight])
-                               ELSE LEN([Insight]) END)
-                     ELSE '' END,
-                'Currency'
+                SUBSTRING([Insight], CHARINDEX(' in ', [Insight]) + 4, 
+                         CHARINDEX(' countries', [Insight]) - CHARINDEX(' in ', [Insight]) - 4),
+                '[Countries]'
             )
-        ELSE [Insight] -- If no match, return the original insight
+        ELSE [Insight]
     END AS CleanedInsight
-FROM 
-    [dbo].[vw_export_test]
+FROM [dbo].[vn_export_test]
 WHERE 
-    [Insight Type] = 'Money Movements'
+    [Insight Type] = 'Money Movement'
     AND [Insight Sub Type] = 'FX';
