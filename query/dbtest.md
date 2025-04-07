@@ -116,3 +116,36 @@ ALTER TABLE company_campaign_tracker
 --     ADD CONSTRAINT fk_cct_company 
 --     FOREIGN KEY (company_id) 
 --     REFERENCES companies(id);
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- add table -->
+```sql
+CREATE TABLE campaign_company_mapping (
+    id VARCHAR(36) PRIMARY KEY,
+    campaign_id VARCHAR(36) NOT NULL,
+    company_id VARCHAR(255) NOT NULL,
+    CONSTRAINT unique_campaign_company UNIQUE (campaign_id, company_id)
+);
+
+-- Add indexes for better performance
+CREATE INDEX idx_campaign_company_mapping_campaign ON campaign_company_mapping (campaign_id);
+CREATE INDEX idx_campaign_company_mapping_company ON campaign_company_mapping (company_id);
+
+-- Add foreign key to campaigns table if needed
+ALTER TABLE campaign_company_mapping 
+    ADD CONSTRAINT fk_campaign_mapping 
+    FOREIGN KEY (campaign_id) 
+    REFERENCES campaigns(id);
+
+    ```
