@@ -10,35 +10,41 @@ SELECT
                             REPLACE(
                                 [Insight],
                                 SUBSTRING([Insight], 1, CHARINDEX(' already uses FX', [Insight]) - 1),
-                                '[Company]'
+                                '[Company]',
+                                1,
+                                LEN(SUBSTRING([Insight], 1, CHARINDEX(' already uses FX', [Insight]) - 1))
                             ),
                             SUBSTRING([Insight], CHARINDEX(' amounting to', [Insight]) + 12, 
                                      CHARINDEX(' (TTM)', [Insight]) - CHARINDEX(' amounting to', [Insight]) - 12),
-                            '[Amount]'
+                            '[Amount]',
+                            1,
+                            LEN(SUBSTRING([Insight], CHARINDEX(' amounting to', [Insight]) + 12, 
+                                     CHARINDEX(' (TTM)', [Insight]) - CHARINDEX(' amounting to', [Insight]) - 12))
                         ),
                         SUBSTRING([Insight], CHARINDEX(' in ', [Insight]) + 4, 
                                  CHARINDEX(' countries', [Insight]) - CHARINDEX(' in ', [Insight]) - 4),
-                        '[Countries]'
+                        '[Countries]',
+                        1,
+                        LEN(SUBSTRING([Insight], CHARINDEX(' in ', [Insight]) + 4, 
+                                 CHARINDEX(' countries', [Insight]) - CHARINDEX(' in ', [Insight]) - 4))
                     ),
                     SUBSTRING([Insight], CHARINDEX(' made in ', [Insight]) + 8, 
                              CHARINDEX(' currency', [Insight]) - CHARINDEX(' made in ', [Insight]) - 8),
-                    '[Currency]'
+                    '[Currency]',
+                    1,
+                    LEN(SUBSTRING([Insight], CHARINDEX(' made in ', [Insight]) + 8, 
+                             CHARINDEX(' currency', [Insight]) - CHARINDEX(' made in ', [Insight]) - 8))
                 ),
                 -- This replaces additional company names in the same insight
                 CASE 
                     WHEN [Insight] LIKE '%could have used USB FX services%' 
                     THEN REPLACE([Insight], 
-                        SUBSTRING([Insight], 
-                            CHARINDEX(' could have used USB FX services', [Insight]) - LEN(
-                                SUBSTRING([Insight], 1, 
-                                    CHARINDEX(' could have used USB FX services', [Insight]) - 1)
-                            ),
-                            LEN(
-                                SUBSTRING([Insight], 1, 
-                                    CHARINDEX(' could have used USB FX services', [Insight]) - 1)
-                            )
-                        ),
-                        '[Company]'
+                        SUBSTRING([Insight], 1, 
+                            CHARINDEX(' could have used USB FX services', [Insight]) - 1),
+                        '[Company]',
+                        1,
+                        LEN(SUBSTRING([Insight], 1, 
+                            CHARINDEX(' could have used USB FX services', [Insight]) - 1))
                     )
                     ELSE [Insight]
                 END
@@ -49,15 +55,23 @@ SELECT
                     REPLACE(
                         [Insight],
                         SUBSTRING([Insight], 1, CHARINDEX(' could have used USB FX services', [Insight]) - 1),
-                        '[Company]'
+                        '[Company]',
+                        1,
+                        LEN(SUBSTRING([Insight], 1, CHARINDEX(' could have used USB FX services', [Insight]) - 1))
                     ),
                     SUBSTRING([Insight], CHARINDEX(' amounting to', [Insight]) + 12, 
                              CHARINDEX(' (TTM)', [Insight]) - CHARINDEX(' amounting to', [Insight]) - 12),
-                    '[Amount]'
+                    '[Amount]',
+                    1,
+                    LEN(SUBSTRING([Insight], CHARINDEX(' amounting to', [Insight]) + 12, 
+                             CHARINDEX(' (TTM)', [Insight]) - CHARINDEX(' amounting to', [Insight]) - 12))
                 ),
                 SUBSTRING([Insight], CHARINDEX(' in ', [Insight]) + 4, 
                          CHARINDEX(' countries', [Insight]) - CHARINDEX(' in ', [Insight]) - 4),
-                '[Countries]'
+                '[Countries]',
+                1,
+                LEN(SUBSTRING([Insight], CHARINDEX(' in ', [Insight]) + 4, 
+                         CHARINDEX(' countries', [Insight]) - CHARINDEX(' in ', [Insight]) - 4))
             )
         ELSE [Insight]
     END AS CleanedInsight
