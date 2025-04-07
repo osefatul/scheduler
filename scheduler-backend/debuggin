@@ -1,104 +1,29 @@
-// Add this before campaignRepository.save(campaign)
-log.info("Campaign before save - all fields:");
-log.info("ID: {}", campaign.getId());
-log.info("Name: {}", campaign.getName());
-log.info("FrequencyPerWeek: {}", campaign.getFrequencyPerWeek());
-log.info("OrginalFrequencyPerWeek: {}", campaign.getOrginalFrequencyPerWeek());
-log.info("DisplayCapping: {}", campaign.getDisplayCapping());
-log.info("Visibility: {}", campaign.getVisibility());
-log.info("Status: {}", campaign.getStatus());
-log.info("RotationStatus: {}", campaign.getRotation_status());
-log.info("UpdatedDate: {}", campaign.getUpdatedDate());
-log.info("RequestedDate: {}", campaign.getRequested_date());
-log.info("StartWeekOfRequestedDate: {}", campaign.getStart_week_of_requested_date());
-
-
-
-
-
-
-
-
-// Replace the single save line with this:
-CampaignMapping savedCampaign = campaignRepository.saveAndFlush(campaign);
-log.info("Saved campaign successfully: {}", savedCampaign.getId());
-
-
-
-
-
-// Add this method to RotationCampaignService.java
-@Transactional
-public void testCampaignSave(String campaignId) {
-    try {
-        CampaignMapping campaign = campaignRepository.findById(campaignId)
-            .orElseThrow(() -> new RuntimeException("Campaign not found: " + campaignId));
-        
-        // Just update the visibility field
-        campaign.setVisibility("VISIBLE");
-        
-        // Try to save
-        campaignRepository.saveAndFlush(campaign);
-        log.info("Test save successful");
-    } catch (Exception e) {
-        log.error("Test save failed: {}", e.getMessage(), e);
-    }
-}
-
-
-
-
-
-
-
-// In your main method
-testCampaignSave(selectedCampaign.getId());
-return campaignService.mapToDTOWithCompanies(selectedCampaign);
-
-
-
-
-
-
-
-
-// Replace the date setting code with this
-try {
-  campaign.setUpdatedDate(currentDate);
-  campaign.setRequested_date(currentDate);
-  Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
-  campaign.setStart_week_of_requested_date(weekStartDate);
-  log.info("Dates set successfully - Updated: {}, Requested: {}, WeekStart: {}", 
-          currentDate, currentDate, weekStartDate);
-} catch (Exception e) {
-  log.error("Error setting dates: {}", e.getMessage(), e);
-  // Use null dates as a fallback
-  campaign.setUpdatedDate(null);
-  campaign.setRequested_date(null);
-  campaign.setStart_week_of_requested_date(null);
-}
-
-
-
-
-
-
-
-
-
-// Try a Simpler Update Approach
-// Instead of updating all these fields at once, try a very minimal update:
-
 private void updateCampaignAfterSelection(CampaignMapping campaign, Date currentDate) {
   try {
-      // Only update these two fields
-      campaign.setVisibility("VISIBLE");
-      campaign.setUpdatedDate(currentDate);
+      log.info("Starting update for campaign ID: {}", campaign.getId());
       
-      // Save
-      campaignRepository.saveAndFlush(campaign);
-      log.info("Minimal campaign update succeeded");
+      // Get a fresh copy of the campaign from the database
+      CampaignMapping freshCampaign = campaignRepository.findById(campaign.getId())
+              .orElseThrow(() -> new RuntimeException("Campaign not found: " + campaign.getId()));
+      
+      // Set only the essential fields
+      if (freshCampaign.getFrequencyPerWeek() != null) {
+          freshCampaign.setFrequencyPerWeek(Math.max(0, freshCampaign.getFrequencyPerWeek() - 1));
+      }
+      
+      if (freshCampaign.getDisplayCapping() != null) {
+          freshCampaign.setDisplayCapping(Math.max(0, freshCampaign.getDisplayCapping() - 1));
+      }
+      
+      freshCampaign.setUpdatedDate(currentDate);
+      freshCampaign.setVisibility("VISIBLE");
+      
+      // Save the fresh campaign
+      campaignRepository.save(freshCampaign);
+      log.info("Campaign updated successfully");
+      
   } catch (Exception e) {
-      log.error("Minimal campaign update failed: {}", e.getMessage(), e);
+      log.error("Error updating campaign: {}", e.getMessage(), e);
+      // Don't throw the exception - let the process continue
   }
 }
