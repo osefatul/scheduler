@@ -39,19 +39,20 @@ public class CompanyCampaignTrackerService {
     }
     
     /**
-     * Check if a company has viewed any campaign this week
+     * Check if a company has viewed any campaign this week, regardless of remaining frequency
      * 
      * @param companyId Company ID
      * @param currentDate Current date
      * @return true if the company has viewed a campaign this week
      */
-    public boolean hasCompanyViewedCampaignThisWeek(String companyId, Date currentDate) {
+    public boolean hasCompanyViewedAnyCampaignThisWeek(String companyId, Date currentDate) {
         Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
-        return trackerRepository.hasCompanyViewedCampaignThisWeek(companyId, weekStartDate);
+        return trackerRepository.hasCompanyViewedAnyCampaignThisWeek(companyId, weekStartDate);
     }
     
     /**
      * Get the tracker for the campaign viewed by this company this week
+     * Will return trackers even if their frequency is now 0
      * 
      * @param companyId Company ID
      * @param currentDate Current date
@@ -60,7 +61,7 @@ public class CompanyCampaignTrackerService {
     public Optional<CompanyCampaignTracker> getViewedTrackerForCompanyThisWeek(String companyId, Date currentDate) {
         Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
         List<CompanyCampaignTracker> viewedTrackers = 
-            trackerRepository.findViewedTrackersForCompanyThisWeek(companyId, weekStartDate);
+            trackerRepository.findTrackersUpdatedThisWeek(companyId, weekStartDate);
         
         if (viewedTrackers.isEmpty()) {
             return Optional.empty();

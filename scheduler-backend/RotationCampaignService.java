@@ -60,7 +60,7 @@ public class RotationCampaignService {
     
     /**
      * Gets the next eligible campaign for rotation based on company
-     * Enforces one campaign per company per week rule
+     * STRICTLY enforces one campaign per company per week rule
      * 
      * @param requestDate Date in format yyyyMMdd
      * @param companyId Company identifier
@@ -77,9 +77,11 @@ public class RotationCampaignService {
             Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
             
             log.info("Finding next eligible campaign for company {} on date {}", companyId, formattedDate);
+            log.info("Week start date: {}", new SimpleDateFormat("yyyy-MM-dd").format(weekStartDate));
             
-            // Check if this company has already viewed any campaign this week
-            boolean hasViewedThisWeek = trackerService.hasCompanyViewedCampaignThisWeek(companyId, currentDate);
+            // *** CRITICAL CHECK ***
+            // Check if this company has viewed ANY campaign this week (even if frequency is now 0)
+            boolean hasViewedThisWeek = trackerService.hasCompanyViewedAnyCampaignThisWeek(companyId, currentDate);
             
             log.info("Company {} has viewed a campaign this week: {}", companyId, hasViewedThisWeek);
             
@@ -91,17 +93,20 @@ public class RotationCampaignService {
                 if (viewedTracker.isPresent()) {
                     CompanyCampaignTracker tracker = viewedTracker.get();
                     
-                    log.info("Company {} has already viewed campaign {} this week (remaining freq: {})", 
-                            companyId, tracker.getCampaignId(), tracker.getRemainingWeeklyFrequency());
+                    log.info("Company {} has already viewed campaign {} this week (remaining freq: {}, cap: {})", 
+                            companyId, tracker.getCampaignId(), 
+                            tracker.getRemainingWeeklyFrequency(),
+                            tracker.getRemainingDisplayCap());
                     
                     // If frequency is exhausted, return no campaigns available
+                    // This is the key check that stops other campaigns from showing after one is exhausted
                     if (tracker.getRemainingWeeklyFrequency() <= 0 || tracker.getRemainingDisplayCap() <= 0) {
                         log.info("Weekly frequency or display cap exhausted for company {}", companyId);
                         throw new DataHandlingException(HttpStatus.OK.toString(),
                                 "No campaigns available for display this week");
                     }
                     
-                    // Continue showing the same campaign this week
+                    // Continue showing the same campaign this week since it still has frequency
                     CampaignMapping selectedCampaign = campaignRepository
                             .findById(tracker.getCampaignId())
                             .orElseThrow(() -> new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
@@ -128,8 +133,9 @@ public class RotationCampaignService {
                     
                     return response;
                 } else {
-                    // Company has viewed a campaign this week but it's no longer eligible (e.g., display capping is 0)
-                    log.info("Company {} has viewed a campaign this week, but it's no longer eligible", companyId);
+                    // Company has viewed a campaign this week but we can't find which one
+                    // This is a safety check - should not happen with our new tracking
+                    log.warn("Company {} has viewed a campaign this week, but we can't identify which one", companyId);
                     throw new DataHandlingException(HttpStatus.OK.toString(),
                             "No campaigns available for display this week");
                 }
