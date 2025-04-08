@@ -58,54 +58,75 @@ public class StandardizedInsightService {
     }
     
     public List<StandardizedInsight> getStandardizedInsightsNative(String insightType, String insightSubType) {
-        // Use a native SQL query for more efficient processing
-        String sql = """
-            SELECT 
-                -- Use our standardization logic to create a cleaned insight text
-                CASE
-                    -- Handle "While X already uses Y, Z could have used..." pattern
-                    WHEN Insight LIKE 'While %' AND Insight LIKE '% already uses %' AND Insight LIKE '%could have used%' THEN
-                        'While [Company] already uses [Service] amounting to [Amount] in [Countries] countries, [Company] could have used USB FX services'
-                    
-                    -- Handle "X could have used USB FX services" pattern
-                    WHEN Insight LIKE '%could have used USB FX services%' THEN
-                        '[Company] could have used USB FX services amounting to [Amount] in [Countries] countries'
-                    
-                    -- Handle "has FX needs based on payment patterns" pattern
-                    WHEN Insight LIKE '%has FX needs based on payment patterns%' THEN
-                        '[Company] has FX needs based on payment patterns'
-                    
-                    -- Handle any other patterns you identify
-                    -- ...
-                    
-                    -- Default case - return the original insight
-                    ELSE Insight
-                END AS standardized_text,
-                COUNT(DISTINCT Top_Parent_Name) AS company_count,
-                STRING_AGG(Top_Parent_Name, ', ') AS companies
-            FROM vw_export_test
-            WHERE Insight_Type = ? AND Insight_Sub_Type = ?
-            GROUP BY 
-                CASE
-                    WHEN Insight LIKE 'While %' AND Insight LIKE '% already uses %' AND Insight LIKE '%could have used%' THEN
-                        'While [Company] already uses [Service] amounting to [Amount] in [Countries] countries, [Company] could have used USB FX services'
-                    WHEN Insight LIKE '%could have used USB FX services%' THEN
-                        '[Company] could have used USB FX services amounting to [Amount] in [Countries] countries'
-                    WHEN Insight LIKE '%has FX needs based on payment patterns%' THEN
-                        '[Company] has FX needs based on payment patterns'
-                    ELSE Insight
-                END
-            ORDER BY company_count DESC
-        """;
-        
-        return jdbcTemplate.query(sql, (rs, rowNum) -> {
-            String standardizedText = rs.getString("standardized_text");
-            int companyCount = rs.getInt("company_count");
-            String companiesStr = rs.getString("companies");
-            List<String> companies = List.of(companiesStr.split(", "));
+        // SQL query with debugging
+        try {
+            // Use a simpler SQL query that's compatible with older SQL Server versions
+            String sql = """
+                SELECT 
+                    CASE
+                        WHEN [Insight] LIKE 'While %' AND [Insight] LIKE '% already uses %' AND [Insight] LIKE '%could have used%' THEN
+                            'While [Company] already uses [Service] amounting to [Amount] in [Countries] countries, [Company] could have used USB FX services'
+                        WHEN [Insight] LIKE '%could have used USB FX services%' THEN
+                            '[Company] could have used USB FX services amounting to [Amount] in [Countries] countries'
+                        WHEN [Insight] LIKE '%has FX needs based on payment patterns%' THEN
+                            '[Company] has FX needs based on payment patterns'
+                        ELSE [Insight]
+                    END AS standardized_text,
+                    COUNT(DISTINCT [Top_Parent_Name]) AS company_count
+                FROM vw_export_test
+                WHERE [Insight_Type] = ? AND [Insight_Sub_Type] = ?
+                GROUP BY 
+                    CASE
+                        WHEN [Insight] LIKE 'While %' AND [Insight] LIKE '% already uses %' AND [Insight] LIKE '%could have used%' THEN
+                            'While [Company] already uses [Service] amounting to [Amount] in [Countries] countries, [Company] could have used USB FX services'
+                        WHEN [Insight] LIKE '%could have used USB FX services%' THEN
+                            '[Company] could have used USB FX services amounting to [Amount] in [Countries] countries'
+                        WHEN [Insight] LIKE '%has FX needs based on payment patterns%' THEN
+                            '[Company] has FX needs based on payment patterns'
+                        ELSE [Insight]
+                    END
+                ORDER BY company_count DESC
+            """;
             
-            return new StandardizedInsight(standardizedText, companyCount, companies);
-        }, insightType, insightSubType);
+            // First get the standardized insights with counts
+            List<Map<String, Object>> standardizedResults = jdbcTemplate.queryForList(sql, insightType, insightSubType);
+            
+            // Now for each standardized insight, get the companies
+            List<StandardizedInsight> result = new ArrayList<>();
+            
+            for (Map<String, Object> row : standardizedResults) {
+                String standardizedText = (String) row.get("standardized_text");
+                int companyCount = ((Number) row.get("company_count")).intValue();
+                
+                // Get companies for this standardized insight with a separate query
+                String companiesSql = """
+                    SELECT DISTINCT [Top_Parent_Name]
+                    FROM vw_export_test
+                    WHERE [Insight_Type] = ? 
+                    AND [Insight_Sub_Type] = ?
+                    AND CASE
+                        WHEN [Insight] LIKE 'While %' AND [Insight] LIKE '% already uses %' AND [Insight] LIKE '%could have used%' THEN
+                            'While [Company] already uses [Service] amounting to [Amount] in [Countries] countries, [Company] could have used USB FX services'
+                        WHEN [Insight] LIKE '%could have used USB FX services%' THEN
+                            '[Company] could have used USB FX services amounting to [Amount] in [Countries] countries'
+                        WHEN [Insight] LIKE '%has FX needs based on payment patterns%' THEN
+                            '[Company] has FX needs based on payment patterns'
+                        ELSE [Insight]
+                    END = ?
+                """;
+                
+                List<String> companies = jdbcTemplate.queryForList(companiesSql, String.class, 
+                        insightType, insightSubType, standardizedText);
+                
+                result.add(new StandardizedInsight(standardizedText, companyCount, companies));
+            }
+            
+            return result;
+        } catch (Exception e) {
+            // Log the error and return an empty list or throw a custom exception
+            e.printStackTrace();
+            return new ArrayList<>();
+        }
     }
     
     /**
