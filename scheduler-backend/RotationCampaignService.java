@@ -27,6 +27,13 @@ import com.usbank.corp.dcr.api.utils.RotationUtils;
 /**
  * Updated service for handling campaign rotation with company-specific tracking
  */
+/**
+ * Final fix for campaign rotation service
+ * Strictly enforces:
+ * 1. One campaign per company per week
+ * 2. When frequencyPerWeek reaches zero, NO campaign for rest of week
+ * 3. When displayCapping reaches zero, campaign is permanently expired
+ */
 @Service
 public class RotationCampaignService {
     
@@ -35,7 +42,6 @@ public class RotationCampaignService {
     private final CampaignRepository campaignRepository;
     private final CampaignCompanyService campaignCompanyService;
     private final CampaignService campaignService;
-    private final CompanyCampaignTrackerService trackerService;
     private final CompanyCampaignTrackerRepository trackerRepository;
     private final JdbcTemplate jdbcTemplate;
     
@@ -47,20 +53,17 @@ public class RotationCampaignService {
             CampaignRepository campaignRepository,
             CampaignCompanyService campaignCompanyService,
             CampaignService campaignService,
-            CompanyCampaignTrackerService trackerService,
             CompanyCampaignTrackerRepository trackerRepository,
             JdbcTemplate jdbcTemplate) {
         this.campaignRepository = campaignRepository;
         this.campaignCompanyService = campaignCompanyService;
         this.campaignService = campaignService;
-        this.trackerService = trackerService;
         this.trackerRepository = trackerRepository;
         this.jdbcTemplate = jdbcTemplate;
     }
     
     /**
      * Gets the next eligible campaign for rotation based on company
-     * STRICTLY enforces one campaign per company per week rule
      * 
      * @param requestDate Date in format yyyyMMdd
      * @param companyId Company identifier
@@ -77,68 +80,60 @@ public class RotationCampaignService {
             Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
             
             log.info("Finding next eligible campaign for company {} on date {}", companyId, formattedDate);
-            log.info("Week start date: {}", new SimpleDateFormat("yyyy-MM-dd").format(weekStartDate));
             
-            // *** CRITICAL CHECK ***
-            // Check if this company has viewed ANY campaign this week (even if frequency is now 0)
-            boolean hasViewedThisWeek = trackerService.hasCompanyViewedAnyCampaignThisWeek(companyId, currentDate);
+            // ***** CRITICAL CHECK 1: Has company viewed ANY campaign this week? *****
+            boolean hasActivityThisWeek = false;
+            List<CompanyCampaignTracker> updatedTrackers = findTrackersUpdatedThisWeek(companyId, weekStartDate);
             
-            log.info("Company {} has viewed a campaign this week: {}", companyId, hasViewedThisWeek);
-            
-            if (hasViewedThisWeek) {
-                // Get the campaign that was viewed
-                Optional<CompanyCampaignTracker> viewedTracker = 
-                        trackerService.getViewedTrackerForCompanyThisWeek(companyId, currentDate);
+            if (!updatedTrackers.isEmpty()) {
+                hasActivityThisWeek = true;
+                log.info("Company {} has activity this week with {} trackers", companyId, updatedTrackers.size());
                 
-                if (viewedTracker.isPresent()) {
-                    CompanyCampaignTracker tracker = viewedTracker.get();
-                    
-                    log.info("Company {} has already viewed campaign {} this week (remaining freq: {}, cap: {})", 
-                            companyId, tracker.getCampaignId(), 
-                            tracker.getRemainingWeeklyFrequency(),
-                            tracker.getRemainingDisplayCap());
-                    
-                    // If frequency is exhausted, return no campaigns available
-                    // This is the key check that stops other campaigns from showing after one is exhausted
-                    if (tracker.getRemainingWeeklyFrequency() <= 0 || tracker.getRemainingDisplayCap() <= 0) {
-                        log.info("Weekly frequency or display cap exhausted for company {}", companyId);
-                        throw new DataHandlingException(HttpStatus.OK.toString(),
-                                "No campaigns available for display this week");
-                    }
-                    
-                    // Continue showing the same campaign this week since it still has frequency
-                    CampaignMapping selectedCampaign = campaignRepository
-                            .findById(tracker.getCampaignId())
-                            .orElseThrow(() -> new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
-                                    "Selected campaign not found in database"));
-                    
-                    // Apply view to decrement counters
-                    boolean updated = trackerService.applyView(companyId, tracker.getCampaignId(), currentDate);
-                    
-                    if (!updated) {
-                        log.warn("Failed to apply view to tracker, attempting fallback update");
-                        emergencyUpdateTracker(tracker.getId(), currentDate);
-                    }
-                    
-                    // Return campaign with updated counter values
-                    CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(selectedCampaign);
-                    
-                    // Get fresh tracker data after the update
-                    CompanyCampaignTracker updatedTracker = trackerRepository
-                            .findByCompanyIdAndCampaignId(companyId, tracker.getCampaignId())
-                            .orElse(tracker);
-                    
-                    response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
-                    response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
-                    
-                    return response;
-                } else {
-                    // Company has viewed a campaign this week but we can't find which one
-                    // This is a safety check - should not happen with our new tracking
-                    log.warn("Company {} has viewed a campaign this week, but we can't identify which one", companyId);
+                // Get the most recently viewed tracker (first in the list)
+                CompanyCampaignTracker mostRecentTracker = updatedTrackers.get(0);
+                
+                // ***** CRITICAL CHECK 2: Is weekly frequency exhausted? *****
+                if (mostRecentTracker.getRemainingWeeklyFrequency() <= 0) {
+                    log.info("Weekly frequency exhausted for company {} on campaign {}", 
+                            companyId, mostRecentTracker.getCampaignId());
                     throw new DataHandlingException(HttpStatus.OK.toString(),
                             "No campaigns available for display this week");
                 }
+                
+                // ***** CRITICAL CHECK 3: Is display capping exhausted? *****
+                if (mostRecentTracker.getRemainingDisplayCap() <= 0) {
+                    log.info("Display capping exhausted for company {} on campaign {}", 
+                            companyId, mostRecentTracker.getCampaignId());
+                    throw new DataHandlingException(HttpStatus.OK.toString(),
+                            "No campaigns available for display this week");
+                }
+                
+                // Continue showing the same campaign this week
+                CampaignMapping selectedCampaign = campaignRepository
+                        .findById(mostRecentTracker.getCampaignId())
+                        .orElseThrow(() -> new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
+                                "Selected campaign not found in database"));
+                
+                // Apply view to decrement counters
+                boolean updated = applyView(companyId, mostRecentTracker.getCampaignId(), currentDate);
+                
+                if (!updated) {
+                    log.warn("Failed to apply view to tracker, attempting fallback update");
+                    emergencyUpdateTracker(mostRecentTracker.getId(), currentDate);
+                }
+                
+                // Return campaign with updated counter values
+                CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(selectedCampaign);
+                
+                // Get fresh tracker data after the update
+                CompanyCampaignTracker updatedTracker = trackerRepository
+                        .findByCompanyIdAndCampaignId(companyId, mostRecentTracker.getCampaignId())
+                        .orElse(mostRecentTracker);
+                
+                response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
+                response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
+                
+                return response;
             }
             
             // If no campaign viewed this week, select a new one based on rotation
@@ -157,11 +152,11 @@ public class RotationCampaignService {
             
             // Step 2: Ensure trackers exist for all eligible campaigns
             for (CampaignMapping campaign : eligibleCampaigns) {
-                trackerService.getOrCreateTracker(companyId, campaign);
+                getOrCreateTracker(companyId, campaign);
             }
             
             // Step 3: Get all active trackers (with remaining weekly frequency and display cap)
-            List<CompanyCampaignTracker> activeTrackers = trackerRepository.findActiveTrackersForCompany(companyId);
+            List<CompanyCampaignTracker> activeTrackers = findActiveTrackersForCompany(companyId);
             
             // Check if we have no active trackers but do have eligible campaigns
             // This suggests frequencies need to be reset (might happen if scheduler fails)
@@ -181,11 +176,11 @@ public class RotationCampaignService {
                 
                 if (needsReset || allTrackers.isEmpty()) {
                     // Reset frequencies for this company
-                    int resetCount = trackerService.resetFrequenciesForCompany(companyId);
+                    int resetCount = resetFrequenciesForCompany(companyId);
                     log.info("Force-reset {} trackers for company {}", resetCount, companyId);
                     
                     // Try to get active trackers again
-                    activeTrackers = trackerRepository.findActiveTrackersForCompany(companyId);
+                    activeTrackers = findActiveTrackersForCompany(companyId);
                 }
             }
             
@@ -203,7 +198,7 @@ public class RotationCampaignService {
             log.info("Selected campaign {} for company {}", selectedTracker.getCampaignId(), companyId);
             
             // Step 5: Apply view to decrement counters
-            boolean updated = trackerService.applyView(companyId, selectedTracker.getCampaignId(), currentDate);
+            boolean updated = applyView(companyId, selectedTracker.getCampaignId(), currentDate);
             
             if (!updated) {
                 log.warn("Failed to apply view to tracker, attempting fallback update");
@@ -239,33 +234,158 @@ public class RotationCampaignService {
     }
     
     /**
+     * Find all trackers that have been updated this week for a company
+     * Orders by last updated date (most recent first)
+     */
+    private List<CompanyCampaignTracker> findTrackersUpdatedThisWeek(String companyId, Date weekStartDate) {
+        return trackerRepository.findAll().stream()
+                .filter(t -> t.getCompanyId().equals(companyId))
+                .filter(t -> t.getLastWeekReset() != null && 
+                            !t.getLastWeekReset().before(weekStartDate))
+                .filter(t -> t.getLastUpdated() != null && 
+                            !t.getLastUpdated().before(weekStartDate))
+                .sorted((t1, t2) -> t2.getLastUpdated().compareTo(t1.getLastUpdated())) // Most recent first
+                .collect(Collectors.toList());
+    }
+    
+    /**
+     * Find all active trackers for a company
+     * Active means they have remaining weekly frequency and display cap
+     */
+    private List<CompanyCampaignTracker> findActiveTrackersForCompany(String companyId) {
+        return trackerRepository.findAll().stream()
+                .filter(t -> t.getCompanyId().equals(companyId))
+                .filter(t -> t.getRemainingWeeklyFrequency() != null && 
+                            t.getRemainingWeeklyFrequency() > 0)
+                .filter(t -> t.getRemainingDisplayCap() != null && 
+                            t.getRemainingDisplayCap() > 0)
+                .collect(Collectors.toList());
+    }
+    
+    /**
+     * Apply a view to a company-campaign pair
+     * Decrements both frequency and capping counters
+     */
+    @Transactional
+    public boolean applyView(String companyId, String campaignId, Date currentDate) {
+        Optional<CompanyCampaignTracker> trackerOpt = 
+                trackerRepository.findByCompanyIdAndCampaignId(companyId, campaignId);
+        
+        if (!trackerOpt.isPresent()) {
+            log.warn("No tracker found for company {}, campaign {}", companyId, campaignId);
+            return false;
+        }
+        
+        CompanyCampaignTracker tracker = trackerOpt.get();
+        
+        // Strict check - both must be > 0 to proceed
+        if (tracker.getRemainingWeeklyFrequency() == null || tracker.getRemainingWeeklyFrequency() <= 0 ||
+            tracker.getRemainingDisplayCap() == null || tracker.getRemainingDisplayCap() <= 0) {
+            
+            log.info("Campaign {} not eligible for company {}: freq={}, cap={}", 
+                    campaignId, companyId, 
+                    tracker.getRemainingWeeklyFrequency(),
+                    tracker.getRemainingDisplayCap());
+            return false;
+        }
+        
+        // Decrement both counters
+        tracker.setRemainingWeeklyFrequency(Math.max(0, tracker.getRemainingWeeklyFrequency() - 1));
+        tracker.setRemainingDisplayCap(Math.max(0, tracker.getRemainingDisplayCap() - 1));
+        tracker.setLastUpdated(currentDate);
+        
+        trackerRepository.save(tracker);
+        
+        log.info("Applied view for company {}, campaign {}. New freq: {}, new cap: {}", 
+                companyId, campaignId, 
+                tracker.getRemainingWeeklyFrequency(), 
+                tracker.getRemainingDisplayCap());
+        
+        return true;
+    }
+    
+    /**
+     * Get or create tracker for a company-campaign pair
+     */
+    @Transactional
+    public CompanyCampaignTracker getOrCreateTracker(String companyId, CampaignMapping campaign) {
+        Optional<CompanyCampaignTracker> existingTracker = 
+                trackerRepository.findByCompanyIdAndCampaignId(companyId, campaign.getId());
+        
+        if (existingTracker.isPresent()) {
+            CompanyCampaignTracker tracker = existingTracker.get();
+            
+            // Check if weekly frequency needs reset
+            Date currentDate = new Date();
+            Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+            
+            if (tracker.getLastWeekReset() != null && 
+                tracker.getLastWeekReset().before(weekStartDate) && 
+                tracker.getOriginalWeeklyFrequency() != null) {
+                
+                log.info("Resetting weekly frequency for company {}, campaign {}", 
+                        companyId, campaign.getId());
+                tracker.setRemainingWeeklyFrequency(tracker.getOriginalWeeklyFrequency());
+                tracker.setLastWeekReset(weekStartDate);
+                tracker = trackerRepository.save(tracker);
+            }
+            
+            return tracker;
+        } else {
+            // Create new tracker
+            CompanyCampaignTracker tracker = new CompanyCampaignTracker();
+            tracker.setCompanyId(companyId);
+            tracker.setCampaignId(campaign.getId());
+            
+            // Initialize with campaign values
+            tracker.setRemainingWeeklyFrequency(campaign.getFrequencyPerWeek());
+            tracker.setOriginalWeeklyFrequency(campaign.getFrequencyPerWeek());
+            tracker.setRemainingDisplayCap(campaign.getDisplayCapping());
+            
+            // Set initial dates
+            Date currentDate = new Date();
+            Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+            tracker.setLastUpdated(currentDate);
+            tracker.setLastWeekReset(weekStartDate);
+            
+            return trackerRepository.save(tracker);
+        }
+    }
+    
+    /**
+     * Reset frequencies for all trackers for a company
+     */
+    @Transactional
+    public int resetFrequenciesForCompany(String companyId) {
+        Date currentDate = new Date();
+        Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+        
+        List<CompanyCampaignTracker> trackers = trackerRepository.findByCompanyId(companyId);
+        int resetCount = 0;
+        
+        for (CompanyCampaignTracker tracker : trackers) {
+            if (tracker.getOriginalWeeklyFrequency() != null) {
+                tracker.setRemainingWeeklyFrequency(tracker.getOriginalWeeklyFrequency());
+                tracker.setLastWeekReset(weekStartDate);
+                trackerRepository.save(tracker);
+                resetCount++;
+            }
+        }
+        
+        return resetCount;
+    }
+    
+    /**
      * Legacy method for updating eligible campaigns for rotations
-     * This maintains backward compatibility with the original implementation
-     * while using the new tracker-based rotation logic
-     * 
-     * @param requestDate Date in format yyyyMMdd
-     * @param companyId Company identifier
-     * @return Updated campaign
-     * @throws DataHandlingException if no eligible campaigns are found
      */
     @Transactional
     public CampaignResponseDTO updateEligibleCampaignsForRotations(String requestDate, String companyId) 
             throws DataHandlingException {
-        
-        log.info("Legacy call: Updating eligible campaigns for rotations: date={}, company={}", 
-                requestDate, companyId);
-        
-        // Use the new method for rotation
         return getNextEligibleCampaign(requestDate, companyId);
     }
     
     /**
      * Select tracker based on rotation strategy
-     * This uses calendar week number to ensure equal rotation
-     * 
-     * @param trackers List of eligible trackers
-     * @param currentDate Current date
-     * @return Selected tracker based on rotation
      */
     private CompanyCampaignTracker selectTrackerByRotation(
             List<CompanyCampaignTracker> trackers, Date currentDate) {
@@ -294,10 +414,7 @@ public class RotationCampaignService {
         });
         
         // Calculate which campaign should be shown this week based on rotation
-        // Make sure weekNumber is positive for the modulo operation
         int adjustedWeekNumber = weekNumber > 0 ? weekNumber : 1;
-        
-        // Campaign index = (weekNumber - 1) % total campaigns
         int trackerIndex = (adjustedWeekNumber - 1) % trackers.size();
         
         CompanyCampaignTracker selectedTracker = trackers.get(trackerIndex);
@@ -321,7 +438,6 @@ public class RotationCampaignService {
     
     /**
      * Emergency backup method to update tracker using direct JDBC
-     * This bypasses all JPA/Hibernate issues
      */
     private boolean emergencyUpdateTracker(String trackerId, Date currentDate) {
         try {
@@ -343,3 +459,4 @@ public class RotationCampaignService {
             return false;
         }
     }
+}
