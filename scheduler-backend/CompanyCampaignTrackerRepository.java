@@ -53,39 +53,29 @@ public interface CompanyCampaignTrackerRepository extends JpaRepository<CompanyC
     List<CompanyCampaignTracker> findActiveTrackersForCompany(@Param("companyId") String companyId);
     
     /**
-     * Check if any tracker for this company has been viewed this week
-     * (has remaining frequency less than original frequency)
+     * Check if any campaign has been viewed by this company this week
+     * This is crucial for the "one campaign per week" rule
+     * It checks if ANY campaign for this company has been viewed this week
+     * (has lastUpdated in this week and lastWeekReset matching current week)
      */
     @Query("SELECT CASE WHEN COUNT(t) > 0 THEN true ELSE false END FROM CompanyCampaignTracker t " +
            "WHERE t.companyId = :companyId " + 
            "AND t.lastWeekReset = :weekStartDate " +
-           "AND t.remainingWeeklyFrequency < t.originalWeeklyFrequency")
+           "AND (t.originalWeeklyFrequency > t.remainingWeeklyFrequency OR t.remainingWeeklyFrequency = 0)")
     boolean hasCompanyViewedCampaignThisWeek(
-            @Param("companyId") String companyId, 
-            @Param("weekStartDate") Date weekStartDate);
+           @Param("companyId") String companyId, 
+           @Param("weekStartDate") Date weekStartDate);
     
     /**
-     * Find the tracker that has been viewed this week for this company
+     * Find any tracker that has been viewed this week for this company
+     * We need to check for ANY campaign that was viewed, even if its frequency is now 0
      */
     @Query("SELECT t FROM CompanyCampaignTracker t " +
            "WHERE t.companyId = :companyId " + 
            "AND t.lastWeekReset = :weekStartDate " +
-           "AND t.remainingWeeklyFrequency < t.originalWeeklyFrequency " +
-           "AND t.remainingDisplayCap > 0")
-    Optional<CompanyCampaignTracker> findViewedTrackerForCompanyThisWeek(
-            @Param("companyId") String companyId, 
-            @Param("weekStartDate") Date weekStartDate);
-
-
-    /**
-     * Check if any tracker for this company has been viewed this week
-     * (has remaining frequency less than original frequency)
-     */
-    @Query("SELECT CASE WHEN COUNT(t) > 0 THEN true ELSE false END FROM CompanyCampaignTracker t " +
-    "WHERE t.companyId = :companyId " + 
-    "AND t.lastWeekReset = :weekStartDate " +
-    "AND (t.remainingWeeklyFrequency < t.originalWeeklyFrequency OR t.remainingWeeklyFrequency = 0)")
-    boolean hasCompanyViewedCampaignThisWeek(
-    @Param("companyId") String companyId, 
-    @Param("weekStartDate") Date weekStartDate);
+           "AND (t.originalWeeklyFrequency > t.remainingWeeklyFrequency OR t.remainingWeeklyFrequency = 0) " +
+           "ORDER BY t.lastUpdated DESC")
+    List<CompanyCampaignTracker> findViewedTrackersForCompanyThisWeek(
+           @Param("companyId") String companyId, 
+           @Param("weekStartDate") Date weekStartDate);
 }

@@ -81,6 +81,8 @@ public class RotationCampaignService {
             // Check if this company has already viewed any campaign this week
             boolean hasViewedThisWeek = trackerService.hasCompanyViewedCampaignThisWeek(companyId, currentDate);
             
+            log.info("Company {} has viewed a campaign this week: {}", companyId, hasViewedThisWeek);
+            
             if (hasViewedThisWeek) {
                 // Get the campaign that was viewed
                 Optional<CompanyCampaignTracker> viewedTracker = 
@@ -89,12 +91,12 @@ public class RotationCampaignService {
                 if (viewedTracker.isPresent()) {
                     CompanyCampaignTracker tracker = viewedTracker.get();
                     
-                    log.info("Company {} has already viewed campaign {} this week", 
-                            companyId, tracker.getCampaignId());
+                    log.info("Company {} has already viewed campaign {} this week (remaining freq: {})", 
+                            companyId, tracker.getCampaignId(), tracker.getRemainingWeeklyFrequency());
                     
                     // If frequency is exhausted, return no campaigns available
-                    if (tracker.getRemainingWeeklyFrequency() <= 0) {
-                        log.info("Weekly frequency exhausted for company {}", companyId);
+                    if (tracker.getRemainingWeeklyFrequency() <= 0 || tracker.getRemainingDisplayCap() <= 0) {
+                        log.info("Weekly frequency or display cap exhausted for company {}", companyId);
                         throw new DataHandlingException(HttpStatus.OK.toString(),
                                 "No campaigns available for display this week");
                     }
@@ -126,7 +128,7 @@ public class RotationCampaignService {
                     
                     return response;
                 } else {
-                    // Company has viewed a campaign but it's no longer eligible (e.g., display capping is 0)
+                    // Company has viewed a campaign this week but it's no longer eligible (e.g., display capping is 0)
                     log.info("Company {} has viewed a campaign this week, but it's no longer eligible", companyId);
                     throw new DataHandlingException(HttpStatus.OK.toString(),
                             "No campaigns available for display this week");
@@ -335,4 +337,3 @@ public class RotationCampaignService {
             return false;
         }
     }
-}

@@ -19,6 +19,9 @@ import com.usbank.corp.dcr.api.utils.RotationUtils;
 /**
  * Service for managing company-specific campaign usage tracking
  */
+/**
+ * Service for managing company-specific campaign usage tracking
+ */
 @Service
 public class CompanyCampaignTrackerService {
     
@@ -56,7 +59,15 @@ public class CompanyCampaignTrackerService {
      */
     public Optional<CompanyCampaignTracker> getViewedTrackerForCompanyThisWeek(String companyId, Date currentDate) {
         Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
-        return trackerRepository.findViewedTrackerForCompanyThisWeek(companyId, weekStartDate);
+        List<CompanyCampaignTracker> viewedTrackers = 
+            trackerRepository.findViewedTrackersForCompanyThisWeek(companyId, weekStartDate);
+        
+        if (viewedTrackers.isEmpty()) {
+            return Optional.empty();
+        }
+        
+        // Return the most recently viewed tracker
+        return Optional.of(viewedTrackers.get(0));
     }
     
     /**
