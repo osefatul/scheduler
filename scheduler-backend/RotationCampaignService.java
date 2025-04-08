@@ -78,50 +78,59 @@ public class RotationCampaignService {
             
             log.info("Finding next eligible campaign for company {} on date {}", companyId, formattedDate);
             
-            // Check if this company has already viewed a campaign this week
-            // If yes, return that same campaign (one campaign per company per week)
-            Optional<CompanyCampaignTracker> viewedThisWeek = 
-                    trackerService.getViewedTrackerForCompanyThisWeek(companyId, currentDate);
+            // Check if this company has already viewed any campaign this week
+            boolean hasViewedThisWeek = trackerService.hasCompanyViewedCampaignThisWeek(companyId, currentDate);
             
-            if (viewedThisWeek.isPresent()) {
-                CompanyCampaignTracker tracker = viewedThisWeek.get();
+            if (hasViewedThisWeek) {
+                // Get the campaign that was viewed
+                Optional<CompanyCampaignTracker> viewedTracker = 
+                        trackerService.getViewedTrackerForCompanyThisWeek(companyId, currentDate);
                 
-                log.info("Company {} has already viewed campaign {} this week", 
-                        companyId, tracker.getCampaignId());
-                
-                // If frequency is exhausted, return no campaigns available
-                if (tracker.getRemainingWeeklyFrequency() <= 0) {
-                    log.info("Weekly frequency exhausted for company {}", companyId);
+                if (viewedTracker.isPresent()) {
+                    CompanyCampaignTracker tracker = viewedTracker.get();
+                    
+                    log.info("Company {} has already viewed campaign {} this week", 
+                            companyId, tracker.getCampaignId());
+                    
+                    // If frequency is exhausted, return no campaigns available
+                    if (tracker.getRemainingWeeklyFrequency() <= 0) {
+                        log.info("Weekly frequency exhausted for company {}", companyId);
+                        throw new DataHandlingException(HttpStatus.OK.toString(),
+                                "No campaigns available for display this week");
+                    }
+                    
+                    // Continue showing the same campaign this week
+                    CampaignMapping selectedCampaign = campaignRepository
+                            .findById(tracker.getCampaignId())
+                            .orElseThrow(() -> new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
+                                    "Selected campaign not found in database"));
+                    
+                    // Apply view to decrement counters
+                    boolean updated = trackerService.applyView(companyId, tracker.getCampaignId(), currentDate);
+                    
+                    if (!updated) {
+                        log.warn("Failed to apply view to tracker, attempting fallback update");
+                        emergencyUpdateTracker(tracker.getId(), currentDate);
+                    }
+                    
+                    // Return campaign with updated counter values
+                    CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(selectedCampaign);
+                    
+                    // Get fresh tracker data after the update
+                    CompanyCampaignTracker updatedTracker = trackerRepository
+                            .findByCompanyIdAndCampaignId(companyId, tracker.getCampaignId())
+                            .orElse(tracker);
+                    
+                    response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
+                    response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
+                    
+                    return response;
+                } else {
+                    // Company has viewed a campaign but it's no longer eligible (e.g., display capping is 0)
+                    log.info("Company {} has viewed a campaign this week, but it's no longer eligible", companyId);
                     throw new DataHandlingException(HttpStatus.OK.toString(),
                             "No campaigns available for display this week");
                 }
-                
-                // Continue showing the same campaign this week
-                CampaignMapping selectedCampaign = campaignRepository
-                        .findById(tracker.getCampaignId())
-                        .orElseThrow(() -> new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
-                                "Selected campaign not found in database"));
-                
-                // Apply view to decrement counters
-                boolean updated = trackerService.applyView(companyId, tracker.getCampaignId(), currentDate);
-                
-                if (!updated) {
-                    log.warn("Failed to apply view to tracker, attempting fallback update");
-                    emergencyUpdateTracker(tracker.getId(), currentDate);
-                }
-                
-                // Return campaign with updated counter values
-                CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(selectedCampaign);
-                
-                // Get fresh tracker data after the update
-                CompanyCampaignTracker updatedTracker = trackerRepository
-                        .findByCompanyIdAndCampaignId(companyId, tracker.getCampaignId())
-                        .orElse(tracker);
-                
-                response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
-                response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
-                
-                return response;
             }
             
             // If no campaign viewed this week, select a new one based on rotation

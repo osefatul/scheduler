@@ -75,4 +75,17 @@ public interface CompanyCampaignTrackerRepository extends JpaRepository<CompanyC
     Optional<CompanyCampaignTracker> findViewedTrackerForCompanyThisWeek(
             @Param("companyId") String companyId, 
             @Param("weekStartDate") Date weekStartDate);
+
+
+    /**
+     * Check if any tracker for this company has been viewed this week
+     * (has remaining frequency less than original frequency)
+     */
+    @Query("SELECT CASE WHEN COUNT(t) > 0 THEN true ELSE false END FROM CompanyCampaignTracker t " +
+    "WHERE t.companyId = :companyId " + 
+    "AND t.lastWeekReset = :weekStartDate " +
+    "AND (t.remainingWeeklyFrequency < t.originalWeeklyFrequency OR t.remainingWeeklyFrequency = 0)")
+    boolean hasCompanyViewedCampaignThisWeek(
+    @Param("companyId") String companyId, 
+    @Param("weekStartDate") Date weekStartDate);
 }
