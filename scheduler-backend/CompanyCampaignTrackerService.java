@@ -35,42 +35,30 @@ public class CompanyCampaignTrackerService {
         this.rotationUtils = rotationUtils;
     }
     
-
     /**
- * Reset frequencies for all trackers for a company
- * This can be called manually if weekly resets aren't working correctly
- * 
- * @param companyId Company ID to reset trackers for
- * @return Number of trackers reset
- */
-@Transactional
-public int resetFrequenciesForCompany(String companyId) {
-    log.info("Manually resetting frequencies for company {}", companyId);
-    
-    Date currentDate = new Date();
-    Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
-    
-    List<CompanyCampaignTracker> trackers = trackerRepository.findByCompanyId(companyId);
-    int resetCount = 0;
-    
-    for (CompanyCampaignTracker tracker : trackers) {
-        if (tracker.getOriginalWeeklyFrequency() != null) {
-            // Always reset to original frequency regardless of last reset time
-            tracker.setRemainingWeeklyFrequency(tracker.getOriginalWeeklyFrequency());
-            tracker.setLastWeekReset(weekStartDate);
-            trackerRepository.save(tracker);
-            resetCount++;
-            
-            log.info("Reset frequency for company {}, campaign {} to {}", 
-                    tracker.getCompanyId(), tracker.getCampaignId(), 
-                    tracker.getRemainingWeeklyFrequency());
-        }
+     * Check if a company has viewed any campaign this week
+     * 
+     * @param companyId Company ID
+     * @param currentDate Current date
+     * @return true if the company has viewed a campaign this week
+     */
+    public boolean hasCompanyViewedCampaignThisWeek(String companyId, Date currentDate) {
+        Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+        return trackerRepository.hasCompanyViewedCampaignThisWeek(companyId, weekStartDate);
     }
     
-    return resetCount;
-}
-
-
+    /**
+     * Get the tracker for the campaign viewed by this company this week
+     * 
+     * @param companyId Company ID
+     * @param currentDate Current date
+     * @return Optional containing the tracker if found
+     */
+    public Optional<CompanyCampaignTracker> getViewedTrackerForCompanyThisWeek(String companyId, Date currentDate) {
+        Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+        return trackerRepository.findViewedTrackerForCompanyThisWeek(companyId, weekStartDate);
+    }
+    
     /**
      * Get or create tracker for a company-campaign pair
      * Initializes with campaign's frequency and capping values
@@ -199,14 +187,37 @@ public int resetFrequenciesForCompany(String companyId) {
     }
     
     /**
-     * Get all active trackers for a company
-     * These have remaining weekly frequency and display cap
+     * Reset frequencies for all trackers for a company
+     * This can be called manually if weekly resets aren't working correctly
      * 
-     * @param companyId Company ID
-     * @return List of active trackers
+     * @param companyId Company ID to reset trackers for
+     * @return Number of trackers reset
      */
-    public List<CompanyCampaignTracker> getActiveTrackersForCompany(String companyId) {
-        return trackerRepository.findActiveTrackersForCompany(companyId);
+    @Transactional
+    public int resetFrequenciesForCompany(String companyId) {
+        log.info("Manually resetting frequencies for company {}", companyId);
+        
+        Date currentDate = new Date();
+        Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+        
+        List<CompanyCampaignTracker> trackers = trackerRepository.findByCompanyId(companyId);
+        int resetCount = 0;
+        
+        for (CompanyCampaignTracker tracker : trackers) {
+            if (tracker.getOriginalWeeklyFrequency() != null) {
+                // Always reset to original frequency regardless of last reset time
+                tracker.setRemainingWeeklyFrequency(tracker.getOriginalWeeklyFrequency());
+                tracker.setLastWeekReset(weekStartDate);
+                trackerRepository.save(tracker);
+                resetCount++;
+                
+                log.info("Reset frequency for company {}, campaign {} to {}", 
+                        tracker.getCompanyId(), tracker.getCampaignId(), 
+                        tracker.getRemainingWeeklyFrequency());
+            }
+        }
+        
+        return resetCount;
     }
     
     /**
