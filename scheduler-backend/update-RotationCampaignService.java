@@ -132,88 +132,121 @@ public class RotationCampaignService {
      * @return Next eligible campaign for the company
      * @throws DataHandlingException if no eligible campaigns are found
      */
-    @Transactional
-    public CampaignResponseDTO getNextEligibleCampaign(String requestDate, String companyId) 
-            throws DataHandlingException {
-        try {
-            // Convert date format
-            String formattedDate = rotationUtils.convertDate(requestDate);
-            Date currentDate = rotationUtils.getinDate(formattedDate);
+    /**
+ * Gets the next eligible campaign for rotation based on company
+ * Uses the improved company-specific tracking
+ * 
+ * @param requestDate Date in format yyyyMMdd
+ * @param companyId Company identifier
+ * @return Next eligible campaign for the company
+ * @throws DataHandlingException if no eligible campaigns are found
+ */
+@Transactional
+public CampaignResponseDTO getNextEligibleCampaign(String requestDate, String companyId) 
+        throws DataHandlingException {
+    try {
+        // Convert date format
+        String formattedDate = rotationUtils.convertDate(requestDate);
+        Date currentDate = rotationUtils.getinDate(formattedDate);
+        
+        log.info("Finding next eligible campaign for company {} on date {}", companyId, formattedDate);
+        
+        // Step 1: Get all eligible campaigns for this company
+        List<CampaignMapping> eligibleCampaigns = campaignRepository
+                .getEligibleCampaignsForCompany(formattedDate, companyId);
+        
+        if (eligibleCampaigns.isEmpty()) {
+            log.info("No eligible campaigns found for company {}", companyId);
+            throw new DataHandlingException(HttpStatus.OK.toString(),
+                    "No eligible campaigns found for the company");
+        }
+        
+        log.info("Found {} eligible campaigns for company {}", eligibleCampaigns.size(), companyId);
+        
+        // Step 2: Ensure trackers exist for all eligible campaigns
+        for (CampaignMapping campaign : eligibleCampaigns) {
+            trackerService.getOrCreateTracker(companyId, campaign);
+        }
+        
+        // Step 3: Get all active trackers (with remaining weekly frequency and display cap)
+        List<CompanyCampaignTracker> activeTrackers = trackerRepository.findActiveTrackersForCompany(companyId);
+        
+        // Check if we have no active trackers but do have eligible campaigns
+        // This suggests frequencies need to be reset (might happen if scheduler fails)
+        if (activeTrackers.isEmpty() && !eligibleCampaigns.isEmpty()) {
+            log.info("No active trackers but have eligible campaigns - checking for reset need for company {}", companyId);
             
-            log.info("Finding next eligible campaign for company {} on date {}", companyId, formattedDate);
-            
-            // Check if there's already an active campaign for this company this week
-            List<CompanyCampaignTracker> trackers = trackerRepository.findByCompanyId(companyId);
-            
-            // Get this week's start date for comparison
+            // Check if it's a new week since last reset
             Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+            List<CompanyCampaignTracker> allTrackers = trackerRepository.findByCompanyId(companyId);
             
-            // Reset frequencies for trackers if needed (crossing to a new week)
-            for (CompanyCampaignTracker tracker : trackers) {
-                if (tracker.getLastWeekReset() != null && 
-                    tracker.getLastWeekReset().before(weekStartDate) &&
-                    tracker.getOriginalWeeklyFrequency() != null) {
-                    
-                    log.info("Resetting weekly frequency for company {}, campaign {}", 
-                            companyId, tracker.getCampaignId());
-                    tracker.setRemainingWeeklyFrequency(tracker.getOriginalWeeklyFrequency());
-                    tracker.setLastWeekReset(weekStartDate);
-                    trackerRepository.save(tracker);
+            boolean needsReset = false;
+            for (CompanyCampaignTracker tracker : allTrackers) {
+                if (tracker.getLastWeekReset() == null || 
+                    tracker.getLastWeekReset().before(weekStartDate)) {
+                    needsReset = true;
+                    break;
                 }
             }
             
-            // Find active trackers after potential resets (those with available frequency this week)
-            List<CompanyCampaignTracker> activeTrackers = trackers.stream()
-                    .filter(t -> t.getRemainingWeeklyFrequency() != null && t.getRemainingWeeklyFrequency() > 0)
-                    .filter(t -> t.getRemainingDisplayCap() != null && t.getRemainingDisplayCap() > 0)
-                    .collect(Collectors.toList());
-            
-            if (activeTrackers.isEmpty()) {
-                log.info("No active campaigns available for company {} this week", companyId);
-                throw new DataHandlingException(HttpStatus.OK.toString(),
-                        "No campaigns available for display this week");
+            if (needsReset || allTrackers.isEmpty()) {
+                // Reset frequencies for this company
+                int resetCount = trackerService.resetFrequenciesForCompany(companyId);
+                log.info("Force-reset {} trackers for company {}", resetCount, companyId);
+                
+                // Try to get active trackers again
+                activeTrackers = trackerRepository.findActiveTrackersForCompany(companyId);
             }
-            
-            // Select one campaign based on rotation
-            CompanyCampaignTracker selectedTracker = selectTrackerByRotation(activeTrackers, currentDate);
-            log.info("Selected tracker for campaign {} for company {}", 
-                    selectedTracker.getCampaignId(), companyId);
-            
-            // Apply view to decrement counters
-            boolean updated = trackerService.applyView(companyId, selectedTracker.getCampaignId(), currentDate);
-            
-            if (!updated) {
-                log.warn("Failed to apply view to tracker, attempting fallback update");
-                emergencyUpdateTracker(selectedTracker.getId(), currentDate);
-            }
-            
-            // Get the campaign details
-            CampaignMapping selectedCampaign = campaignRepository
-                    .findById(selectedTracker.getCampaignId())
-                    .orElseThrow(() -> new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
-                            "Selected campaign not found in database"));
-            
-            // Return campaign response with tracker-specific values
-            CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(selectedCampaign);
-            
-            // Get fresh tracker data after the update
-            CompanyCampaignTracker updatedTracker = trackerRepository
-                    .findByCompanyIdAndCampaignId(companyId, selectedTracker.getCampaignId())
-                    .orElse(selectedTracker);
-            
-            // Override the frequency values with the company-specific values
-            response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
-            response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
-            
-            return response;
-        } catch (DataHandlingException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Unexpected error in getNextEligibleCampaign: {}", e.getMessage(), e);
-            throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
-                    "Unexpected error: " + e.getMessage());
         }
+        
+        if (activeTrackers.isEmpty()) {
+            log.info("No active campaigns with available frequency/capping for company {}", companyId);
+            throw new DataHandlingException(HttpStatus.OK.toString(),
+                    "No campaigns available for display this week");
+        }
+        
+        log.info("Found {} campaigns with available frequency for company {}", 
+                activeTrackers.size(), companyId);
+        
+        // Step 4: Select campaign using rotation strategy
+        CompanyCampaignTracker selectedTracker = selectTrackerByRotation(activeTrackers, currentDate);
+        log.info("Selected campaign {} for company {}", selectedTracker.getCampaignId(), companyId);
+        
+        // Step 5: Apply view to decrement counters
+        boolean updated = trackerService.applyView(companyId, selectedTracker.getCampaignId(), currentDate);
+        
+        if (!updated) {
+            log.warn("Failed to apply view to tracker, attempting fallback update");
+            emergencyUpdateTracker(selectedTracker.getId(), currentDate);
+        }
+        
+        // Step 6: Get the campaign details
+        CampaignMapping selectedCampaign = campaignRepository
+                .findById(selectedTracker.getCampaignId())
+                .orElseThrow(() -> new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
+                        "Selected campaign not found in database"));
+        
+        // Step 7: Return campaign response with tracker-specific values
+        CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(selectedCampaign);
+        
+        // Get fresh tracker data after the update
+        CompanyCampaignTracker updatedTracker = trackerRepository
+                .findByCompanyIdAndCampaignId(companyId, selectedTracker.getCampaignId())
+                .orElse(selectedTracker);
+        
+        // Override the frequency values with the company-specific values
+        response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
+        response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
+        
+        return response;
+    } catch (DataHandlingException e) {
+        throw e;
+    } catch (Exception e) {
+        log.error("Unexpected error in getNextEligibleCampaign: {}", e.getMessage(), e);
+        throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
+                "Unexpected error: " + e.getMessage());
     }
+}
     
     /**
      * Select tracker based on rotation strategy

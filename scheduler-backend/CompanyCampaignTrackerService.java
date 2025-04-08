@@ -35,6 +35,42 @@ public class CompanyCampaignTrackerService {
         this.rotationUtils = rotationUtils;
     }
     
+
+    /**
+ * Reset frequencies for all trackers for a company
+ * This can be called manually if weekly resets aren't working correctly
+ * 
+ * @param companyId Company ID to reset trackers for
+ * @return Number of trackers reset
+ */
+@Transactional
+public int resetFrequenciesForCompany(String companyId) {
+    log.info("Manually resetting frequencies for company {}", companyId);
+    
+    Date currentDate = new Date();
+    Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+    
+    List<CompanyCampaignTracker> trackers = trackerRepository.findByCompanyId(companyId);
+    int resetCount = 0;
+    
+    for (CompanyCampaignTracker tracker : trackers) {
+        if (tracker.getOriginalWeeklyFrequency() != null) {
+            // Always reset to original frequency regardless of last reset time
+            tracker.setRemainingWeeklyFrequency(tracker.getOriginalWeeklyFrequency());
+            tracker.setLastWeekReset(weekStartDate);
+            trackerRepository.save(tracker);
+            resetCount++;
+            
+            log.info("Reset frequency for company {}, campaign {} to {}", 
+                    tracker.getCompanyId(), tracker.getCampaignId(), 
+                    tracker.getRemainingWeeklyFrequency());
+        }
+    }
+    
+    return resetCount;
+}
+
+
     /**
      * Get or create tracker for a company-campaign pair
      * Initializes with campaign's frequency and capping values
