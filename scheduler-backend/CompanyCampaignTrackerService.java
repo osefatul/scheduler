@@ -1,5 +1,6 @@
 package com.usbank.corp.dcr.api.service;
 
+import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
@@ -80,76 +81,83 @@ public class CompanyCampaignTrackerService {
      * @return The tracker entity
      */
     @Transactional
-    public CompanyCampaignTracker getOrCreateTracker(String companyId, CampaignMapping campaign) {
-        try {
-            // Check explicitly if the tracker exists
-            Optional<CompanyCampaignTracker> existingTracker = 
-                    trackerRepository.findByCompanyIdAndCampaignId(companyId, campaign.getId());
+public CompanyCampaignTracker getOrCreateTracker(String companyId, CampaignMapping campaign) {
+    try {
+        // Check explicitly if the tracker exists
+        Optional<CompanyCampaignTracker> existingTracker = 
+                trackerRepository.findByCompanyIdAndCampaignId(companyId, campaign.getId());
+        
+        if (existingTracker.isPresent()) {
+            CompanyCampaignTracker tracker = existingTracker.get();
             
-            if (existingTracker.isPresent()) {
-                CompanyCampaignTracker tracker = existingTracker.get();
+            // CRITICAL FIX: Only reset if we're in a new week
+            Date currentDate = new Date();
+            Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+            
+            log.info("Tracker dates: lastWeekReset={}, currentWeekStart={}", 
+                     tracker.getLastWeekReset(), weekStartDate);
+            
+            // ONLY reset if the lastWeekReset is BEFORE the current week start
+            if (tracker.getLastWeekReset() != null && 
+                tracker.getLastWeekReset().before(weekStartDate) && 
+                tracker.getOriginalWeeklyFrequency() != null) {
                 
-                // Check if weekly frequency needs reset
-                Date currentDate = new Date();
-                Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
-                
-                if (tracker.getLastWeekReset() != null && 
-                    tracker.getLastWeekReset().before(weekStartDate) && 
-                    tracker.getOriginalWeeklyFrequency() != null) {
-                    
-                    log.info("Resetting weekly frequency for company {}, campaign {}", 
-                            companyId, campaign.getId());
-                    tracker.setRemainingWeeklyFrequency(tracker.getOriginalWeeklyFrequency());
-                    tracker.setLastWeekReset(weekStartDate);
-                    tracker = trackerRepository.save(tracker);
-                }
-                
-                return tracker;
-            } else {
-                // Before creating, double-check to avoid race conditions
-                if (trackerRepository.existsByCompanyIdAndCampaignId(companyId, campaign.getId())) {
-                    return trackerRepository.findByCompanyIdAndCampaignId(companyId, campaign.getId()).get();
-                }
-                
-                // Create new tracker initialized with campaign values
-                CompanyCampaignTracker tracker = new CompanyCampaignTracker();
-                tracker.setCompanyId(companyId);
-                tracker.setCampaignId(campaign.getId());
-                
-                // Initialize with campaign values
-                tracker.setRemainingWeeklyFrequency(campaign.getFrequencyPerWeek());
-                tracker.setOriginalWeeklyFrequency(campaign.getFrequencyPerWeek());
-                tracker.setRemainingDisplayCap(campaign.getDisplayCapping());
-                
-                // Set initial dates
-                Date currentDate = new Date();
-                Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
-                tracker.setLastUpdated(currentDate);
+                log.info("RESETTING WEEKLY FREQUENCY for company {}, campaign {}", 
+                        companyId, campaign.getId());
+                tracker.setRemainingWeeklyFrequency(tracker.getOriginalWeeklyFrequency());
                 tracker.setLastWeekReset(weekStartDate);
-                
-                log.info("Created new tracker for company {}, campaign {} with frequency {} and cap {}", 
-                        companyId, campaign.getId(), 
-                        tracker.getRemainingWeeklyFrequency(), 
-                        tracker.getRemainingDisplayCap());
-                
-                try {
-                    return trackerRepository.save(tracker);
-                } catch (Exception e) {
-                    // If insertion fails due to a duplicate key, try one more time to fetch
-                    if (e.getMessage() != null && e.getMessage().contains("unique_company_campaign")) {
-                        log.warn("Duplicate key when saving tracker - retrying fetch");
-                        return trackerRepository.findByCompanyIdAndCampaignId(companyId, campaign.getId())
-                                .orElseThrow(() -> e); // Rethrow if still can't find
-                    }
-                    throw e;
-                }
+                tracker = trackerRepository.save(tracker);
+            } else {
+                log.info("NOT RESETTING frequency for company {}, campaign {} - already in current week", 
+                        companyId, campaign.getId());
             }
-        } catch (Exception e) {
-            log.error("Error in getOrCreateTracker for company {}, campaign {}: {}", 
-                    companyId, campaign.getId(), e.getMessage(), e);
-            throw e;
+            
+            return tracker;
+        } else {
+            // Before creating, double-check to avoid race conditions
+            if (trackerRepository.existsByCompanyIdAndCampaignId(companyId, campaign.getId())) {
+                return trackerRepository.findByCompanyIdAndCampaignId(companyId, campaign.getId()).get();
+            }
+            
+            // Create new tracker initialized with campaign values
+            CompanyCampaignTracker tracker = new CompanyCampaignTracker();
+            tracker.setCompanyId(companyId);
+            tracker.setCampaignId(campaign.getId());
+            
+            // Initialize with campaign values
+            tracker.setRemainingWeeklyFrequency(campaign.getFrequencyPerWeek());
+            tracker.setOriginalWeeklyFrequency(campaign.getFrequencyPerWeek());
+            tracker.setRemainingDisplayCap(campaign.getDisplayCapping());
+            
+            // Set initial dates
+            Date currentDate = new Date();
+            Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+            tracker.setLastUpdated(currentDate);
+            tracker.setLastWeekReset(weekStartDate);
+            
+            log.info("Created new tracker for company {}, campaign {} with frequency {} and cap {}", 
+                    companyId, campaign.getId(), 
+                    tracker.getRemainingWeeklyFrequency(), 
+                    tracker.getRemainingDisplayCap());
+            
+            try {
+                return trackerRepository.save(tracker);
+            } catch (Exception e) {
+                // If insertion fails due to a duplicate key, try one more time to fetch
+                if (e.getMessage() != null && e.getMessage().contains("unique_company_campaign")) {
+                    log.warn("Duplicate key when saving tracker - retrying fetch");
+                    return trackerRepository.findByCompanyIdAndCampaignId(companyId, campaign.getId())
+                            .orElseThrow(() -> e); // Rethrow if still can't find
+                }
+                throw e;
+            }
         }
+    } catch (Exception e) {
+        log.error("Error in getOrCreateTracker for company {}, campaign {}: {}", 
+                companyId, campaign.getId(), e.getMessage(), e);
+        throw e;
     }
+}
     
     /**
      * Apply a view to a company-campaign pair
@@ -172,14 +180,22 @@ public class CompanyCampaignTrackerService {
         
         CompanyCampaignTracker tracker = trackerOpt.get();
         
+        log.info("BEFORE VIEW: Company={}, Campaign={}, Freq={}/{}, Cap={}", 
+                 companyId, campaignId, 
+                 tracker.getRemainingWeeklyFrequency(), 
+                 tracker.getOriginalWeeklyFrequency(),
+                 tracker.getRemainingDisplayCap());
+        
         // Strict check - both must be > 0 to proceed
-        if (tracker.getRemainingWeeklyFrequency() == null || tracker.getRemainingWeeklyFrequency() <= 0 ||
-            tracker.getRemainingDisplayCap() == null || tracker.getRemainingDisplayCap() <= 0) {
-            
-            log.info("Campaign {} not eligible for company {}: freq={}, cap={}", 
-                    campaignId, companyId, 
-                    tracker.getRemainingWeeklyFrequency(),
-                    tracker.getRemainingDisplayCap());
+        if (tracker.getRemainingWeeklyFrequency() == null || tracker.getRemainingWeeklyFrequency() <= 0) {
+            log.info("Cannot apply view - FREQUENCY EXHAUSTED: Company={}, Campaign={}, Freq={}", 
+                    companyId, campaignId, tracker.getRemainingWeeklyFrequency());
+            return false;
+        }
+        
+        if (tracker.getRemainingDisplayCap() == null || tracker.getRemainingDisplayCap() <= 0) {
+            log.info("Cannot apply view - DISPLAY CAP EXHAUSTED: Company={}, Campaign={}, Cap={}", 
+                    companyId, campaignId, tracker.getRemainingDisplayCap());
             return false;
         }
         
@@ -188,12 +204,20 @@ public class CompanyCampaignTrackerService {
         tracker.setRemainingDisplayCap(Math.max(0, tracker.getRemainingDisplayCap() - 1));
         tracker.setLastUpdated(currentDate);
         
+        // Add explicit debug of the current week
+        Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+        log.info("Current week start: {}, Tracker week reset: {}", 
+                 sdf.format(weekStartDate),
+                 tracker.getLastWeekReset() != null ? sdf.format(tracker.getLastWeekReset()) : "null");
+        
         trackerRepository.save(tracker);
         
-        log.info("Applied view for company {}, campaign {}. New freq: {}, new cap: {}", 
-                companyId, campaignId, 
-                tracker.getRemainingWeeklyFrequency(), 
-                tracker.getRemainingDisplayCap());
+        log.info("AFTER VIEW: Company={}, Campaign={}, NEW Freq={}/{}, NEW Cap={}", 
+                 companyId, campaignId, 
+                 tracker.getRemainingWeeklyFrequency(), 
+                 tracker.getOriginalWeeklyFrequency(),
+                 tracker.getRemainingDisplayCap());
         
         return true;
     }
