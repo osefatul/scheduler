@@ -110,11 +110,9 @@ public class CompanyCampaignTrackerService {
         
         CompanyCampaignTracker tracker = trackerOpt.get();
         
-        // Check eligibility (both frequency and display cap must be available)
-        if (tracker.getRemainingWeeklyFrequency() == null || 
-            tracker.getRemainingWeeklyFrequency() <= 0 ||
-            tracker.getRemainingDisplayCap() == null || 
-            tracker.getRemainingDisplayCap() <= 0) {
+        // Strict check - both must be > 0 to proceed
+        if (tracker.getRemainingWeeklyFrequency() == null || tracker.getRemainingWeeklyFrequency() <= 0 ||
+            tracker.getRemainingDisplayCap() == null || tracker.getRemainingDisplayCap() <= 0) {
             
             log.info("Campaign {} not eligible for company {}: freq={}, cap={}", 
                     campaignId, companyId, 
@@ -123,13 +121,10 @@ public class CompanyCampaignTrackerService {
             return false;
         }
         
-        // Decrement counters
+        // Decrement both counters
         tracker.setRemainingWeeklyFrequency(tracker.getRemainingWeeklyFrequency() - 1);
         tracker.setRemainingDisplayCap(tracker.getRemainingDisplayCap() - 1);
         tracker.setLastUpdated(currentDate);
-        
-        // If display cap is exhausted, this campaign won't be shown again
-        // If weekly frequency is exhausted, this campaign won't be shown again this week
         
         trackerRepository.save(tracker);
         
