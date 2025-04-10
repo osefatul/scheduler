@@ -6,6 +6,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -244,12 +245,12 @@ public class RotationCampaignService {
         
         log.info("Found {} active campaigns for company {}", activeTrackers.size(), companyId);
         
-        // Select campaign using rotation strategy with the requested date
-        CompanyCampaignTracker selectedTracker = selectTrackerByRotation(activeTrackers, currentDate);
-        log.info("Selected campaign {} for company {}", selectedTracker.getCampaignId(), companyId);
-        
-        // Apply view to decrement counters using the requested date
-        boolean updated = applyView(companyId, selectedTracker.getCampaignId(), currentDate);
+// UPDATED: Use perfect rotation to select campaign
+CompanyCampaignTracker selectedTracker = selectPerfectRotation(activeTrackers, companyId, currentDate);
+log.info("Selected campaign {} for company {}", selectedTracker.getCampaignId(), companyId);
+
+// Apply view to decrement counters using the requested date
+boolean updated = applyView(companyId, selectedTracker.getCampaignId(), currentDate);
         
         if (!updated) {
             log.warn("Failed to apply view to tracker");
@@ -684,6 +685,116 @@ private CompanyCampaignTracker selectTrackerByRotation(
     
     return selectedTracker;
 }
+
+
+private CompanyCampaignTracker selectPerfectRotation(
+        List<CompanyCampaignTracker> eligibleTrackers, 
+        String companyId,
+        Date currentDate) {
+    
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+    log.info("Selecting perfect rotation for company {} on date {}", 
+             companyId, sdf.format(currentDate));
+    
+    if (eligibleTrackers.isEmpty()) {
+        throw new IllegalArgumentException("No eligible trackers provided");
+    }
+    
+    if (eligibleTrackers.size() == 1) {
+        log.info("Only one eligible campaign, selecting it: {}", 
+                 eligibleTrackers.get(0).getCampaignId());
+        return eligibleTrackers.get(0);
+    }
+    
+    // Get ALL trackers for this company, sorted by most recently viewed first
+    List<CompanyCampaignTracker> allTrackers = 
+        trackerRepository.findTrackersByCompanyOrderByLastUpdated(companyId);
+    
+    log.info("Found {} total trackers for company {}", allTrackers.size(), companyId);
+    
+    // Build a sequence of campaign IDs in the order they were last shown
+    List<String> recentlyShownSequence = allTrackers.stream()
+            .filter(t -> t.getLastUpdated() != null)
+            .map(CompanyCampaignTracker::getCampaignId)
+            .distinct()
+            .collect(Collectors.toList());
+    
+    log.info("Recent display sequence: {}", recentlyShownSequence);
+    
+    // Get eligible campaign IDs
+    Set<String> eligibleCampaignIds = eligibleTrackers.stream()
+            .map(CompanyCampaignTracker::getCampaignId)
+            .collect(Collectors.toSet());
+    
+    // Find the most recently shown eligible campaign
+    String lastShownEligibleCampaign = null;
+    for (String campaignId : recentlyShownSequence) {
+        if (eligibleCampaignIds.contains(campaignId)) {
+            lastShownEligibleCampaign = campaignId;
+            break;
+        }
+    }
+    
+    log.info("Last shown eligible campaign: {}", lastShownEligibleCampaign);
+    
+    // Get campaigns that contain campaign details
+    Map<String, CampaignMapping> campaignMap = getCampaignMap(
+            eligibleTrackers.stream()
+                   .map(CompanyCampaignTracker::getCampaignId)
+                   .collect(Collectors.toList()));
+    
+    // Sort eligible trackers by creation date (oldest first) for baseline ordering
+    eligibleTrackers.sort((t1, t2) -> {
+        CampaignMapping c1 = campaignMap.get(t1.getCampaignId());
+        CampaignMapping c2 = campaignMap.get(t2.getCampaignId());
+        
+        if (c1 == null || c2 == null || c1.getCreatedDate() == null || c2.getCreatedDate() == null) {
+            return 0;
+        }
+        
+        return c1.getCreatedDate().compareTo(c2.getCreatedDate());
+    });
+    
+    // Log the initial ordering
+    log.info("Eligible campaigns in creation date order:");
+    for (int i = 0; i < eligibleTrackers.size(); i++) {
+        log.info("  Position {}: Campaign {}", 
+                i + 1, eligibleTrackers.get(i).getCampaignId());
+    }
+    
+    // If we've shown an eligible campaign before, find the next one in rotation
+    if (lastShownEligibleCampaign != null) {
+        int lastShownIndex = -1;
+        
+        // Find the index of the last shown campaign in our ordered list
+        for (int i = 0; i < eligibleTrackers.size(); i++) {
+            if (eligibleTrackers.get(i).getCampaignId().equals(lastShownEligibleCampaign)) {
+                lastShownIndex = i;
+                break;
+            }
+        }
+        
+        if (lastShownIndex >= 0) {
+            // Select the next campaign in the rotation
+            int nextIndex = (lastShownIndex + 1) % eligibleTrackers.size();
+            
+            CompanyCampaignTracker selectedTracker = eligibleTrackers.get(nextIndex);
+            log.info("Selected next campaign in rotation: {} (index {})", 
+                    selectedTracker.getCampaignId(), nextIndex);
+            
+            return selectedTracker;
+        }
+    }
+    
+    // If we haven't shown any eligible campaign before, or couldn't find the last shown,
+    // start with the first one in the creation-date-ordered list
+    CompanyCampaignTracker selectedTracker = eligibleTrackers.get(0);
+    log.info("Starting fresh rotation with first campaign: {}", 
+            selectedTracker.getCampaignId());
+    
+    return selectedTracker;
+}
+
     
     /**
      * Get a map of campaign ID to campaign entity

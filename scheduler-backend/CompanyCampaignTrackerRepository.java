@@ -81,4 +81,11 @@ public interface CompanyCampaignTrackerRepository extends JpaRepository<CompanyC
     List<CompanyCampaignTracker> findTrackersUpdatedThisWeek(
            @Param("companyId") String companyId, 
            @Param("weekStartDate") Date weekStartDate);
+
+
+           @Query("SELECT t FROM CompanyCampaignTracker t " +
+           "WHERE t.companyId = :companyId " +
+           "ORDER BY t.lastUpdated DESC")
+    List<CompanyCampaignTracker> findTrackersByCompanyOrderByLastUpdated(
+            @Param("companyId") String companyId);
 }
