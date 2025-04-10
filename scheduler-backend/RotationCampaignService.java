@@ -2,6 +2,7 @@ package com.usbank.corp.dcr.api.service;
 
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -285,6 +286,64 @@ boolean updated = applyView(companyId, selectedTracker.getCampaignId(), currentD
                 "Unexpected error: " + e.getMessage());
     }
 }
+
+
+private CampaignMapping selectCampaignForRotation(
+        List<CampaignMapping> eligibleCampaigns, Date currentDate) {
+    
+    if (eligibleCampaigns.isEmpty()) {
+        return null;
+    }
+    
+    if (eligibleCampaigns.size() == 1) {
+        return eligibleCampaigns.get(0);
+    }
+    
+    // Sort campaigns by creation date (oldest first)
+    eligibleCampaigns.sort((c1, c2) -> {
+        if (c1.getCreatedDate() == null && c2.getCreatedDate() == null) return 0;
+        if (c1.getCreatedDate() == null) return 1;
+        if (c2.getCreatedDate() == null) return -1;
+        return c1.getCreatedDate().compareTo(c2.getCreatedDate());
+    });
+    
+    // Get current calendar week
+    Calendar cal = Calendar.getInstance();
+    cal.setTime(currentDate);
+    int weekNumber = cal.get(Calendar.WEEK_OF_YEAR);
+    
+    // Use week number to select campaign
+    // This will rotate through all campaigns in creation date order
+    int selectedIndex = (weekNumber - 1) % eligibleCampaigns.size();
+    
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+    
+    // Log the rotation details
+    log.info("Campaign rotation details:");
+    log.info("- Current date: {}", sdf.format(currentDate));
+    log.info("- Week number: {}", weekNumber);
+    log.info("- Total eligible campaigns: {}", eligibleCampaigns.size());
+    log.info("- Selected index: {}", selectedIndex);
+    
+    // Log all eligible campaigns
+    for (int i = 0; i < eligibleCampaigns.size(); i++) {
+        CampaignMapping campaign = eligibleCampaigns.get(i);
+        log.info("  [{}] Campaign ID: {}, Name: {}, Created: {}, Date Range: {} to {}", 
+                i,
+                campaign.getId(),
+                campaign.getName(),
+                campaign.getCreatedDate() != null ? sdf.format(campaign.getCreatedDate()) : "unknown",
+                campaign.getStartDate() != null ? sdf.format(campaign.getStartDate()) : "unknown",
+                campaign.getEndDate() != null ? sdf.format(campaign.getEndDate()) : "unknown");
+    }
+    
+    CampaignMapping selected = eligibleCampaigns.get(selectedIndex);
+    log.info("Selected campaign: {} ({})", selected.getName(), selected.getId());
+    
+    return selected;
+}
+
+
     
     /**
      * Find all trackers that have been updated this week for a company
