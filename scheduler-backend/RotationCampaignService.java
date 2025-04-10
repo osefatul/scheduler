@@ -594,22 +594,34 @@ public class RotationCampaignService {
     /**
      * Select tracker based on rotation strategy
      */
-    private CompanyCampaignTracker selectTrackerByRotation(
+/**
+ * Select tracker based on improved rotation strategy
+ * Maintains proper sequence even when new campaigns become eligible
+ * 
+ * @param trackers List of eligible trackers
+ * @param currentDate Current date
+ * @return Selected tracker based on rotation
+ */
+private CompanyCampaignTracker selectTrackerByRotation(
         List<CompanyCampaignTracker> trackers, Date currentDate) {
     
     // Get current week information
     String weekKey = rotationUtils.getWeekKey(currentDate);
     int weekNumber = Integer.parseInt(weekKey.split("-")[1]);
     
-    log.info("Selecting tracker for week number: {}", weekNumber);
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+    log.info("Selecting tracker for week number: {} ({})", weekNumber, sdf.format(currentDate));
     
-    // Get corresponding campaigns to sort by creation date
+    // Get corresponding campaigns to get their details
     Map<String, CampaignMapping> campaignMap = getCampaignMap(
             trackers.stream()
                    .map(CompanyCampaignTracker::getCampaignId)
                    .collect(Collectors.toList()));
     
-    // STRICT ORDERING: Sort trackers by campaign creation date (oldest first)
+    // CRITICAL FIX: Sort ELIGIBLE campaigns in a logical sequence
+    // First sort by most recently viewed (to maintain sequence)
+    // Then by start date (to incorporate newly eligible campaigns properly)
+    // Finally by creation date (as the tiebreaker)
     trackers.sort((t1, t2) -> {
         CampaignMapping c1 = campaignMap.get(t1.getCampaignId());
         CampaignMapping c2 = campaignMap.get(t2.getCampaignId());
@@ -619,43 +631,56 @@ public class RotationCampaignService {
         if (c1 == null) return 1;
         if (c2 == null) return -1;
         
-        // Handle null creation dates
+        // First check which campaign has been viewed most recently
+        // Viewed campaigns come AFTER non-viewed ones (to maintain rotation)
+        boolean t1Viewed = t1.getLastUpdated() != null && t1.getRemainingWeeklyFrequency() < t1.getOriginalWeeklyFrequency();
+        boolean t2Viewed = t2.getLastUpdated() != null && t2.getRemainingWeeklyFrequency() < t2.getOriginalWeeklyFrequency();
+        
+        if (t1Viewed && !t2Viewed) return 1;  // t1 viewed, t2 not viewed, so t2 comes first
+        if (!t1Viewed && t2Viewed) return -1; // t1 not viewed, t2 viewed, so t1 comes first
+        
+        // If both have been viewed or both not viewed, check how recently they became eligible
+        Date t1StartDate = c1.getStartDate();
+        Date t2StartDate = c2.getStartDate();
+        
+        if (t1StartDate != null && t2StartDate != null) {
+            // Campaigns that JUST became eligible come first in the rotation
+            if (!t1StartDate.equals(t2StartDate)) {
+                // The one with the more recent start date should be shown first
+                return t2StartDate.compareTo(t1StartDate);
+            }
+        }
+        
+        // As final tiebreaker, use creation date (oldest first)
         if (c1.getCreatedDate() == null && c2.getCreatedDate() == null) return 0;
         if (c1.getCreatedDate() == null) return 1;
         if (c2.getCreatedDate() == null) return -1;
-        
-        // Primary sort by creation date (oldest first)
         return c1.getCreatedDate().compareTo(c2.getCreatedDate());
     });
     
     // Log the sorted order for debugging
-    log.info("Campaigns ordered by creation date (oldest first):");
+    log.info("Campaigns ordered for rotation consideration:");
     for (int i = 0; i < trackers.size(); i++) {
         CampaignMapping campaign = campaignMap.get(trackers.get(i).getCampaignId());
-        log.info("  Position {}: Campaign {} (created: {})", 
-                i + 1, 
-                campaign != null ? campaign.getId() : "unknown",
-                campaign != null && campaign.getCreatedDate() != null ? 
-                    new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(campaign.getCreatedDate()) : "unknown");
+        if (campaign != null) {
+            log.info("  Position {}: Campaign {} (name: {}, start: {}, created: {})", 
+                    i + 1, 
+                    campaign.getId(),
+                    campaign.getName(),
+                    campaign.getStartDate() != null ? sdf.format(campaign.getStartDate()) : "null",
+                    campaign.getCreatedDate() != null ? sdf.format(campaign.getCreatedDate()) : "null");
+        }
     }
     
-    // Use rotation if there are multiple campaigns
-    // For first week, show oldest campaign (index 0)
-    // For subsequent weeks, rotate based on week number
-    int adjustedWeekNumber = weekNumber > 0 ? weekNumber : 1;
-    int trackerIndex = 0;  // Default to first (oldest) campaign
-    
-    if (trackers.size() > 1) {
-        // Campaign index = (weekNumber - 1) % total campaigns
-        trackerIndex = (adjustedWeekNumber - 1) % trackers.size();
-    }
-    
-    CompanyCampaignTracker selectedTracker = trackers.get(trackerIndex);
+    // Select the first tracker in the sorted list
+    // This will be the next one in the rotation sequence
+    CompanyCampaignTracker selectedTracker = trackers.get(0);
     CampaignMapping selectedCampaign = campaignMap.get(selectedTracker.getCampaignId());
     
-    log.info("Selected campaign {} (index {}) for rotation in week {}", 
-            selectedCampaign != null ? selectedCampaign.getName() : "unknown", 
-            trackerIndex, weekNumber);
+    log.info("Selected campaign {} ({}) for rotation in week {}", 
+            selectedCampaign.getId(),
+            selectedCampaign.getName(),
+            weekNumber);
     
     return selectedTracker;
 }
