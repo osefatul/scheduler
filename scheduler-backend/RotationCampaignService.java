@@ -76,7 +76,11 @@ public class RotationCampaignService {
      * @return Next eligible campaign for the company
      * @throws DataHandlingException if no eligible campaigns are found
      */
-    @Transactional
+    /**
+ * Optimized campaign rotation algorithm
+ * Efficiently handles any number of campaigns with proper rotation logic
+ */
+@Transactional
 public CampaignResponseDTO getNextEligibleCampaign(String requestDate, String companyId) 
         throws DataHandlingException {
     try {
@@ -86,82 +90,112 @@ public CampaignResponseDTO getNextEligibleCampaign(String requestDate, String co
         Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
         
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
-        log.info("Processing request for company {} on date {}", 
-                 companyId, sdf.format(currentDate));
+        log.info("Processing request for company {} on date {}", companyId, sdf.format(currentDate));
+        log.info("Week start date: {}", sdf.format(weekStartDate));
         
-        // STEP 1: Check if we've already shown a campaign this week
-        List<CompanyCampaignTracker> viewedTrackers = findTrackersViewedThisWeek(companyId, weekStartDate);
+        // STEP 1: Check if we've already assigned a campaign for this week
+        CampaignMapping assignedCampaign = getAssignedCampaignForWeek(companyId, weekStartDate);
         
-        if (!viewedTrackers.isEmpty()) {
-            // Continue with same campaign - standard weekly frequency logic
-            // (This part is working correctly so keeping it brief)
-            CompanyCampaignTracker tracker = viewedTrackers.get(0);
+        if (assignedCampaign != null) {
+            log.info("Found already assigned campaign for this week: {} ({})", 
+                    assignedCampaign.getName(), assignedCampaign.getId());
             
+            // Get tracker for assigned campaign
+            CompanyCampaignTracker tracker = trackerRepository
+                    .findByCompanyIdAndCampaignId(companyId, assignedCampaign.getId())
+                    .orElseThrow(() -> new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
+                            "Tracker not found for assigned campaign"));
+            
+            // Check if frequency is exhausted
             if (tracker.getRemainingWeeklyFrequency() <= 0) {
-                log.info("Weekly frequency exhausted for company {}", companyId);
+                log.info("Weekly frequency exhausted for campaign {}", assignedCampaign.getName());
                 throw new DataHandlingException(HttpStatus.OK.toString(),
-                        "No campaigns available for display this week");
+                        "No more views available for this week");
             }
             
-            CampaignMapping campaign = campaignRepository.findById(tracker.getCampaignId())
-                    .orElseThrow(() -> new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
-                            "Campaign not found"));
-                            
-            boolean updated = applyView(companyId, tracker.getCampaignId(), currentDate);
-            // Continue with returning response...
+            // Check if display cap is exhausted
+            if (tracker.getRemainingDisplayCap() <= 0) {
+                log.info("Display cap exhausted for campaign {}", assignedCampaign.getName());
+                throw new DataHandlingException(HttpStatus.OK.toString(),
+                        "This campaign has reached its display cap limit");
+            }
+            
+            // Check if still in date range
+            boolean validDate = isWithinDateRange(assignedCampaign, currentDate);
+            if (!validDate) {
+                log.info("Assigned campaign is no longer in valid date range");
+                throw new DataHandlingException(HttpStatus.OK.toString(),
+                        "No campaigns available in valid date range");
+            }
+            
+            // Apply view
+            boolean updated = applyView(companyId, assignedCampaign.getId(), currentDate);
+            
+            if (!updated) {
+                log.warn("Failed to apply view to tracker");
+                throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
+                        "Failed to apply view to tracker");
+            }
+            
+            // Get updated tracker
+            CompanyCampaignTracker updatedTracker = trackerRepository
+                    .findByCompanyIdAndCampaignId(companyId, assignedCampaign.getId())
+                    .orElse(tracker);
+            
+            // Prepare response
+            CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(assignedCampaign);
+            response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
+            response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
+            
+            return response;
         }
         
-        // STEP 2: Get all eligible campaigns for this date
+        // STEP 2: No campaign assigned for this week, select a new one
+        log.info("No campaign assigned for this week, selecting next in rotation");
+        
+        // Get campaigns eligible for rotation
         List<CampaignMapping> eligibleCampaigns = getEligibleCampaigns(companyId, currentDate);
         
         if (eligibleCampaigns.isEmpty()) {
             log.info("No eligible campaigns found for company {} on date {}", 
-                     companyId, sdf.format(currentDate));
+                    companyId, sdf.format(currentDate));
             throw new DataHandlingException(HttpStatus.OK.toString(),
                     "No eligible campaigns found for the company on the requested date");
         }
         
         log.info("Found {} eligible campaigns", eligibleCampaigns.size());
         
-        // STEP 3: Sort campaigns by creation date (oldest first)
-        eligibleCampaigns.sort((c1, c2) -> {
-            if (c1.getCreatedDate() == null && c2.getCreatedDate() == null) return 0;
-            if (c1.getCreatedDate() == null) return 1;
-            if (c2.getCreatedDate() == null) return -1;
-            return c1.getCreatedDate().compareTo(c2.getCreatedDate());
-        });
+        // STEP 3: Get last assigned campaign from previous weeks
+        CampaignMapping lastAssignedCampaign = getLastAssignedCampaign(companyId);
         
-        // Log the sorted campaigns
-        log.info("Eligible campaigns in creation date order:");
-        for (int i = 0; i < eligibleCampaigns.size(); i++) {
-            CampaignMapping campaign = eligibleCampaigns.get(i);
-            log.info("  {}: {} (created: {})", 
-                     i, campaign.getName(), 
-                     campaign.getCreatedDate() != null ? sdf.format(campaign.getCreatedDate()) : "null");
-        }
+        // STEP 4: Select next campaign in rotation
+        CampaignMapping selectedCampaign = selectNextCampaignInRotation(
+                eligibleCampaigns, lastAssignedCampaign);
         
-        // STEP 4: Find the most recently used campaign in the current rotation cycle
-        CampaignMapping selectedCampaign = findNextCampaignInRotation(companyId, eligibleCampaigns);
-        
-        log.info("Selected campaign: {} ({})", 
+        log.info("Selected next campaign in rotation: {} ({})", 
                 selectedCampaign.getName(), selectedCampaign.getId());
         
-        // STEP 5: Get or create tracker
+        // STEP 5: Mark this campaign as assigned for this week
+        assignCampaignForWeek(companyId, selectedCampaign, weekStartDate);
+        
+        // STEP 6: Get or create tracker
         CompanyCampaignTracker tracker = getOrCreateTracker(companyId, selectedCampaign, currentDate);
         
-        // STEP 6: Apply view
-        boolean updated = applyView(companyId, tracker.getCampaignId(), currentDate);
+        // STEP 7: Apply view
+        boolean updated = applyView(companyId, selectedCampaign.getId(), currentDate);
         
         if (!updated) {
+            log.warn("Failed to apply view to tracker");
             throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
                     "Failed to apply view to tracker");
         }
         
-        // Prepare response
+        // Get updated tracker
         CompanyCampaignTracker updatedTracker = trackerRepository
-                .findByCompanyIdAndCampaignId(companyId, tracker.getCampaignId())
+                .findByCompanyIdAndCampaignId(companyId, selectedCampaign.getId())
                 .orElse(tracker);
         
+        // Prepare response
         CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(selectedCampaign);
         response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
         response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
@@ -177,153 +211,212 @@ public CampaignResponseDTO getNextEligibleCampaign(String requestDate, String co
 }
 
 /**
- * Find the next campaign to show in the rotation cycle
- * This implements a true rotation algorithm where each campaign gets a turn
- * before the cycle repeats
+ * Get the campaign assigned for the current week
  */
-private CampaignMapping findNextCampaignInRotation(String companyId, List<CampaignMapping> eligibleCampaigns) {
-    // If only one eligible campaign, return it
-    if (eligibleCampaigns.size() == 1) {
-        log.info("Only one eligible campaign, selecting it");
-        return eligibleCampaigns.get(0);
-    }
-    
+private CampaignMapping getAssignedCampaignForWeek(String companyId, Date weekStartDate) {
     SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
     
+    // Find trackers that were last reset this week
+    List<CompanyCampaignTracker> weekTrackers = trackerRepository.findAll().stream()
+            .filter(t -> t.getCompanyId().equals(companyId))
+            .filter(t -> {
+                if (t.getLastWeekReset() == null) return false;
+                Date trackerWeekStart = rotationUtils.getWeekStartDate(t.getLastWeekReset());
+                return sdf.format(trackerWeekStart).equals(sdf.format(weekStartDate));
+            })
+            .collect(Collectors.toList());
+    
+    if (weekTrackers.isEmpty()) {
+        log.info("No trackers found for week starting {}", sdf.format(weekStartDate));
+        return null;
+    }
+    
+    // Find the tracker that was assigned for this week
+    Optional<CompanyCampaignTracker> weeklyAssignedTracker = weekTrackers.stream()
+            .filter(t -> t.getLastUpdated() != null) // Has been viewed
+            .min(Comparator.comparing(CompanyCampaignTracker::getLastUpdated)); // First viewed in week
+    
+    if (!weeklyAssignedTracker.isPresent()) {
+        log.info("No assigned campaign found for week starting {}", sdf.format(weekStartDate));
+        return null;
+    }
+    
+    // Get the campaign
+    String campaignId = weeklyAssignedTracker.get().getCampaignId();
+    Optional<CampaignMapping> campaign = campaignRepository.findById(campaignId);
+    
+    if (!campaign.isPresent()) {
+        log.warn("Campaign not found for tracker: {}", campaignId);
+        return null;
+    }
+    
+    log.info("Found assigned campaign for week starting {}: {} ({})", 
+            sdf.format(weekStartDate), campaign.get().getName(), campaignId);
+    
+    return campaign.get();
+}
+
+/**
+ * Get the last assigned campaign (from previous weeks)
+ */
+private CampaignMapping getLastAssignedCampaign(String companyId) {
     // Get all trackers for this company
-    List<CompanyCampaignTracker> allTrackers = trackerRepository.findByCompanyId(companyId);
+    List<CompanyCampaignTracker> allTrackers = trackerRepository.findAll().stream()
+            .filter(t -> t.getCompanyId().equals(companyId))
+            .filter(t -> t.getLastUpdated() != null) // Has been viewed before
+            .sorted(Comparator.comparing(CompanyCampaignTracker::getLastUpdated).reversed()) // Most recent first
+            .collect(Collectors.toList());
     
-    // Collect all campaigns that have been viewed (sorted by last updated, most recent first)
-    List<CompanyCampaignTracker> viewedTrackers = allTrackers.stream()
-        .filter(t -> t.getLastUpdated() != null) // Has been viewed
-        .sorted(Comparator.comparing(CompanyCampaignTracker::getLastUpdated).reversed())
-        .collect(Collectors.toList());
+    if (allTrackers.isEmpty()) {
+        log.info("No previous campaign assignments found for company {}", companyId);
+        return null;
+    }
     
-    log.info("Found {} viewed trackers for company {}", viewedTrackers.size(), companyId);
+    // Get the most recently viewed campaign
+    String lastCampaignId = allTrackers.get(0).getCampaignId();
+    Optional<CampaignMapping> lastCampaign = campaignRepository.findById(lastCampaignId);
     
-    // If no campaigns have been viewed yet, start with the first (oldest by creation date)
-    if (viewedTrackers.isEmpty()) {
-        log.info("No campaigns viewed yet, starting with the oldest (by creation date)");
+    if (!lastCampaign.isPresent()) {
+        log.warn("Last campaign not found: {}", lastCampaignId);
+        return null;
+    }
+    
+    log.info("Last assigned campaign was: {} ({})", 
+            lastCampaign.get().getName(), lastCampaignId);
+    
+    return lastCampaign.get();
+}
+
+/**
+ * Select the next campaign in rotation
+ */
+private CampaignMapping selectNextCampaignInRotation(
+        List<CampaignMapping> eligibleCampaigns, CampaignMapping lastAssignedCampaign) {
+    
+    // If no previous campaign or only one eligible, select the first eligible
+    if (lastAssignedCampaign == null || eligibleCampaigns.size() == 1) {
+        log.info("Starting rotation with first eligible campaign");
+        
+        // Sort by creation date (oldest first)
+        eligibleCampaigns.sort((c1, c2) -> {
+            if (c1.getCreatedDate() == null && c2.getCreatedDate() == null) return 0;
+            if (c1.getCreatedDate() == null) return 1;
+            if (c2.getCreatedDate() == null) return -1;
+            return c1.getCreatedDate().compareTo(c2.getCreatedDate());
+        });
+        
         return eligibleCampaigns.get(0);
     }
     
-    // Create a list of campaign IDs in the current rotation cycle
-    List<String> rotationCycle = new ArrayList<>();
-    Set<String> seenIds = new HashSet<>();
+    // Sort eligible campaigns by creation date (oldest first)
+    eligibleCampaigns.sort((c1, c2) -> {
+        if (c1.getCreatedDate() == null && c2.getCreatedDate() == null) return 0;
+        if (c1.getCreatedDate() == null) return 1;
+        if (c2.getCreatedDate() == null) return -1;
+        return c1.getCreatedDate().compareTo(c2.getCreatedDate());
+    });
     
-    // Build the rotation cycle from viewed trackers
-    for (CompanyCampaignTracker tracker : viewedTrackers) {
-        String campaignId = tracker.getCampaignId();
-        
-        // Only add each campaign once to the cycle
-        if (!seenIds.contains(campaignId)) {
-            rotationCycle.add(campaignId);
-            seenIds.add(campaignId);
-            
-            log.info("Added to rotation cycle: {} (last viewed: {})", 
-                     campaignId, 
-                     tracker.getLastUpdated() != null ? sdf.format(tracker.getLastUpdated()) : "null");
-        }
+    // Log sorted order
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+    log.info("Eligible campaigns in creation date order:");
+    for (int i = 0; i < eligibleCampaigns.size(); i++) {
+        CampaignMapping campaign = eligibleCampaigns.get(i);
+        log.info("  {}: {} (created: {})", 
+                i, campaign.getName(), 
+                campaign.getCreatedDate() != null ? sdf.format(campaign.getCreatedDate()) : "null");
     }
     
-    // Match rotation cycle campaigns to eligible campaigns
-    List<CampaignMapping> rotationEligible = new ArrayList<>();
-    for (String campaignId : rotationCycle) {
-        for (CampaignMapping campaign : eligibleCampaigns) {
-            if (campaign.getId().equals(campaignId)) {
-                rotationEligible.add(campaign);
-                break;
-            }
-        }
-    }
-    
-    // Check if all eligible campaigns have been viewed in the current cycle
-    boolean allEligibleViewed = true;
-    for (CampaignMapping campaign : eligibleCampaigns) {
-        if (!seenIds.contains(campaign.getId())) {
-            allEligibleViewed = false;
+    // Find index of last assigned campaign
+    int lastIndex = -1;
+    for (int i = 0; i < eligibleCampaigns.size(); i++) {
+        if (eligibleCampaigns.get(i).getId().equals(lastAssignedCampaign.getId())) {
+            lastIndex = i;
             break;
         }
     }
     
-    // If all eligible campaigns have been viewed, start a new cycle
-    if (allEligibleViewed) {
-        log.info("All eligible campaigns have been viewed, starting a new cycle");
+    // If last campaign is not in eligible list, start with first
+    if (lastIndex == -1) {
+        log.info("Last campaign not in eligible list, starting with first");
         return eligibleCampaigns.get(0);
     }
     
-    // Find the most recently viewed campaign
-    CompanyCampaignTracker lastViewed = viewedTrackers.get(0);
-    String lastViewedId = lastViewed.getCampaignId();
+    // Select next campaign in rotation (wrap around if at end)
+    int nextIndex = (lastIndex + 1) % eligibleCampaigns.size();
+    CampaignMapping nextCampaign = eligibleCampaigns.get(nextIndex);
     
-    log.info("Most recently viewed campaign: {}", lastViewedId);
+    log.info("Last campaign index: {}, next campaign index: {}", lastIndex, nextIndex);
+    log.info("Next campaign in rotation: {} ({})", 
+            nextCampaign.getName(), nextCampaign.getId());
     
-    // Find the next campaign in the eligible list that hasn't been viewed yet
-    boolean foundLastViewed = false;
-    for (CampaignMapping campaign : eligibleCampaigns) {
-        // Skip until we find the last viewed campaign
-        if (!foundLastViewed) {
-            if (campaign.getId().equals(lastViewedId)) {
-                foundLastViewed = true;
-            }
-            continue;
-        }
-        
-        // If this campaign hasn't been viewed in the current cycle, select it
-        if (!seenIds.contains(campaign.getId())) {
-            log.info("Found next campaign in rotation: {}", campaign.getId());
-            return campaign;
-        }
-    }
-    
-    // If we reach here, we need to select the first campaign that hasn't been viewed
-    for (CampaignMapping campaign : eligibleCampaigns) {
-        if (!seenIds.contains(campaign.getId())) {
-            log.info("Selecting first unviewed campaign: {}", campaign.getId());
-            return campaign;
-        }
-    }
-    
-    // If we somehow get here, just return the first eligible campaign
-    log.warn("Could not determine next campaign in rotation, using first eligible");
-    return eligibleCampaigns.get(0);
+    return nextCampaign;
 }
 
 /**
- * Get all eligible campaigns for a given date
+ * Mark a campaign as assigned for the current week
+ */
+private void assignCampaignForWeek(String companyId, CampaignMapping campaign, Date weekStartDate) {
+    log.info("Assigning campaign {} ({}) for week starting {}", 
+            campaign.getName(), campaign.getId(), 
+            new SimpleDateFormat("yyyy-MM-dd").format(weekStartDate));
+    
+    // Get or create tracker
+    CompanyCampaignTracker tracker = getOrCreateTracker(companyId, campaign, weekStartDate);
+    
+    // Mark as assigned for this week by ensuring lastWeekReset is set
+    if (tracker.getLastWeekReset() == null || 
+        !rotationUtils.getWeekStartDate(tracker.getLastWeekReset())
+                      .equals(weekStartDate)) {
+        tracker.setLastWeekReset(weekStartDate);
+        trackerRepository.save(tracker);
+    }
+}
+
+/**
+ * Get all eligible campaigns for a company on a date
  */
 private List<CampaignMapping> getEligibleCampaigns(String companyId, Date currentDate) {
-    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
-    log.info("Finding eligible campaigns for company {} on date {}", 
-             companyId, sdf.format(currentDate));
-    
     // Get all campaigns for this company
     List<String> campaignIds = campaignCompanyService.getCampaignsForCompany(companyId);
     List<CampaignMapping> allCampaigns = campaignRepository.findAllById(campaignIds);
+    
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+    log.info("Found {} total campaigns for company {}", allCampaigns.size(), companyId);
     
     // Filter to only eligible campaigns
     return allCampaigns.stream()
         .filter(campaign -> {
             // Check date range
-            boolean validStart = campaign.getStartDate() == null || 
-                               !currentDate.before(campaign.getStartDate());
-            boolean validEnd = campaign.getEndDate() == null || 
-                             !currentDate.after(campaign.getEndDate());
+            boolean validDate = isWithinDateRange(campaign, currentDate);
             
             // Check display cap
-            boolean displayCapValid = !isDisplayCapExhausted(companyId, campaign.getId());
+            boolean displayCapAvailable = !isDisplayCapExhausted(companyId, campaign.getId());
             
-            // Combined check
-            boolean isEligible = validStart && validEnd && displayCapValid;
+            boolean isEligible = validDate && displayCapAvailable;
             
-            log.info("Campaign {} ({}): start={}, end={}, cap={}, ELIGIBLE={}", 
-                   campaign.getId(), campaign.getName(),
-                   validStart, validEnd, displayCapValid, isEligible);
+            log.info("Campaign {} ({}): dateValid={}, capAvailable={}, ELIGIBLE={}", 
+                    campaign.getId(), campaign.getName(),
+                    validDate, displayCapAvailable, isEligible);
             
             return isEligible;
         })
         .collect(Collectors.toList());
 }
+
+/**
+ * Check if a campaign is within its date range
+ */
+private boolean isWithinDateRange(CampaignMapping campaign, Date currentDate) {
+    boolean validStart = campaign.getStartDate() == null || 
+                       !currentDate.before(campaign.getStartDate());
+    boolean validEnd = campaign.getEndDate() == null || 
+                     !currentDate.after(campaign.getEndDate());
+    return validStart && validEnd;
+}
+
+
+
+
 
 
 
