@@ -53,17 +53,14 @@ export const RMUsersUnEnrollTable = ({
     pageIndex: 0,
     pageSize: 10,
   });
-  
+
+  // Initialize enroll state with empty array (not null)
   const [enroll, setEnroll] = useState<{
     campaignId: string;
-    unEnrollReason: string;
-    additionalComments: string;
     usersList: any[];
   }>({
     campaignId: campaignId,
-    unEnrollReason: "",
-    additionalComments: "",
-    usersList: [],
+    usersList: [], // Initialize with empty array instead of null
   });
 
   // Initialize filteredData when usersData is loaded
@@ -80,6 +77,21 @@ export const RMUsersUnEnrollTable = ({
       campaignId: campaignId
     }));
   }, [campaignId]);
+
+  // Update usersList in enroll state when rowSelection changes
+  useEffect(() => {
+    if (Object.keys(rowSelection).length > 0 && usersData?.usersList) {
+      const selectedUsers = Object.keys(rowSelection).map(rowId => {
+        const index = parseInt(rowId);
+        return currentPageData[index];
+      }).filter(Boolean);
+      
+      setEnroll(prev => ({
+        ...prev,
+        usersList: selectedUsers
+      }));
+    }
+  }, [rowSelection]);
 
   const handleSort = (key: string) => {
     setSortConfig((prev) => {
@@ -171,24 +183,34 @@ export const RMUsersUnEnrollTable = ({
     setData(currentPageData);
   }, [currentPageData]);
 
-  // Handle checkbox selection and update usersList
+  // Handle checkbox selection
   const handleRowSelectionChange = (newSelection: Record<string, boolean>) => {
     setRowSelection(newSelection);
     
     // If any checkbox is selected, hide the error message
     if (Object.keys(newSelection).length > 0) {
       setShowNotification(false);
+      
+      // Get the selected users
+      const selectedUsers = Object.keys(newSelection).map(rowId => {
+        const index = parseInt(rowId);
+        return currentPageData[index];
+      }).filter(Boolean);
+      
+      // Update the usersList with the selected users
+      setEnroll(prev => ({
+        ...prev,
+        usersList: selectedUsers
+      }));
+      
+      console.log("Selected users for enrollment:", selectedUsers);
+    } else {
+      // Reset usersList when no rows are selected
+      setEnroll(prev => ({
+        ...prev,
+        usersList: []
+      }));
     }
-    
-    // Update the usersList based on selection
-    const selectedRows = Object.keys(newSelection).map(
-      (rowId) => currentPageData[parseInt(rowId)]
-    );
-    
-    setEnroll(prev => ({
-      ...prev,
-      usersList: selectedRows
-    }));
   };
 
   const handleSearchButtonClick = () => {
@@ -313,13 +335,9 @@ export const RMUsersUnEnrollTable = ({
                 text: "Export",
                 size: "small",
                 clickEvent: () => {
-                  const selectedRows = Object.keys(rowSelection).map(
-                    (rowId) => currentPageData[parseInt(rowId)]
-                  );
-                  setEnroll((prev) => ({
-                    ...prev,
-                    usersList: selectedRows,
-                  }));
+                  // This doesn't actually work as expected to get selected users
+                  // So we handle selection directly in handleRowSelectionChange
+                  console.log("Export button clicked");
                 },
                 id: "primary-button-test-id-enroll",
               },

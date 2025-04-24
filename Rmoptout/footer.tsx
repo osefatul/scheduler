@@ -42,7 +42,6 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
   const [isAboveFooter, setIsAboveFooter] = useState(false);
   const [modalIsOpen, setModalIsOpen] = useState(false);
   const [updateEnrollUsers, { isLoading: isEnrollLoading }] = useUpdateenrollUsersMutation();
-  
   const selectedRowsCount = Object.keys(rowSelection).length;
   
   useEffect(() => {
@@ -73,29 +72,25 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
     
     setShowNotification(false);
     
-    // Trigger the button click programmatically to get selected users
-    const button = document.getElementById(
-      "button-primary-button-test-id-enroll_usb-table_default--id"
-    );
-
-    if (button) {
-      button.click();
-    }
-    
-    const selectedRows = Object.keys(rowSelection).map(
-      (rowId) => usersData.usersList[parseInt(rowId)]
-    );
+    // Get the selected rows directly from the rowSelection object and usersData
+    const selectedRows = Object.keys(rowSelection).map(rowId => {
+      const index = parseInt(rowId);
+      return usersData.usersList[index];
+    }).filter(Boolean); // Filter out any undefined values
     
     if (selectedRows.length === 0) {
-      console.error("No users selected");
+      console.error("No users selected for enrollment");
       return;
     }
     
     try {
+      // Create a deep copy of the request to avoid reference issues
       const enrollData = {
-        ...usersData,
-        usersList: selectedRows,
+        campaignId: usersData.campaignId,
+        usersList: [...selectedRows] // Explicitly create a new array with the selected users
       };
+      
+      console.log("Sending enrollment data:", JSON.stringify(enrollData));
       
       const response = await updateEnrollUsers(enrollData).unwrap();
       console.log("Enroll response:", response);
@@ -116,17 +111,6 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
     }
     
     setShowNotification(false);
-    
-    // Trigger the button click programmatically
-    const button = document.getElementById(
-      "button-primary-button-test-id_usb-table_default--id"
-    );
-    
-    if (button) {
-      button.click();
-    }
-    
-    // Open the modal for unenroll action
     setModalIsOpen(true);
   };
   
@@ -164,7 +148,13 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
         modalIsOpen={modalIsOpen}
         setShowNotification={setShowNotification}
         setModalIsOpen={setModalIsOpen}
-        usersData={usersData}
+        usersData={{
+          ...usersData,
+          usersList: Object.keys(rowSelection).map(rowId => {
+            const index = parseInt(rowId);
+            return usersData.usersList[index];
+          }).filter(Boolean) // Make sure we only pass selected users to the modal
+        }}
         setRowSelection={setRowSelection}
         onHideNotification={onHideNotification}
       />
