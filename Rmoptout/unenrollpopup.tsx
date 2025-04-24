@@ -51,6 +51,7 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
   const [additionalComments, setAdditionalComments] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [updateUnenrollUsers, { isLoading }] = useUpdateUnenrollUsersMutation();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Reset form when modal is opened
   useEffect(() => {
@@ -58,6 +59,7 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
       setSelectedReason(null);
       setAdditionalComments("");
       setErrorMessage(null);
+      setIsSubmitting(false);
     }
   }, [modalIsOpen]);
 
@@ -74,49 +76,44 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
   };
 
   // Calculate the length of the usersList
-  const usersListLength = Object.keys(usersData.usersList || {}).length;
+  const usersListLength = usersData.usersList ? usersData.usersList.length : 0;
 
   const handleProceedClick = async () => {
+    // Prevent multiple submissions
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    
     // Validate inputs
     if (!selectedReason) {
       setErrorMessage("Select at least one option.");
+      setIsSubmitting(false);
       return;
     }
 
     if (selectedReason === "other" && !additionalComments.trim()) {
       setErrorMessage("Please provide additional comments for 'other' reason.");
+      setIsSubmitting(false);
       return;
     }
 
     // Clear error message if validation passes
     setErrorMessage(null);
     
-    // Get selected rows from the table
-    const button = document.getElementById(
-      "button-primary-button-test-id_usb-table_default--id"
-    );
-    if (button) {
-      button.click();
-    }
-    
-    // Get the selected users from rowSelection
-    const selectedRows = Object.keys(usersData.usersList || {}).map(
-      rowId => usersData.usersList[parseInt(rowId)]
-    );
-    
-    if (!selectedRows || selectedRows.length === 0) {
-      console.error("No users selected");
+    if (!usersData.usersList || usersData.usersList.length === 0) {
+      console.error("No users selected for unenrollment");
+      setIsSubmitting(false);
       return;
     }
 
     const updatedUsersData = {
-      ...usersData,
+      campaignId: usersData.campaignId,
       unEnrollReason: selectedReason || "",
       additionalComments: additionalComments,
-      usersList: selectedRows
+      usersList: usersData.usersList
     };
 
     try {
+      console.log("Sending unenroll data:", JSON.stringify(updatedUsersData));
       const response = await updateUnenrollUsers(updatedUsersData).unwrap();
       console.log("Unenroll response:", response);
       
@@ -131,6 +128,8 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
     } catch (error) {
       console.error("Error unenrolling users:", error);
       onHideNotification(false);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -221,8 +220,12 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
           </UnEnrollPopupTextarea>
         </ModalBody>
         <ModalFooter>
-          <USBButton id="primary-modal-button" handleClick={handleProceedClick}>
-            Proceed
+          <USBButton 
+            id="primary-modal-button" 
+            handleClick={handleProceedClick}
+            disabled={isSubmitting || isLoading}
+          >
+            {isSubmitting ? "Processing..." : "Proceed"}
           </USBButton>
         </ModalFooter>
       </USBModal>

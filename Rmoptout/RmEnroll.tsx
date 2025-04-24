@@ -55,6 +55,7 @@ export const RMUsersTable = ({
     pageSize: 10,
   });
   
+  // Initialize with an empty array for usersList
   const [unEnroll, setUnEnroll] = useState<{
     campaignId: string;
     unEnrollReason: string;
@@ -81,6 +82,29 @@ export const RMUsersTable = ({
       campaignId: campaignId
     }));
   }, [campaignId]);
+  
+  // Update usersList in unEnroll state when rowSelection changes
+  useEffect(() => {
+    if (Object.keys(rowSelection).length > 0 && currentPageData) {
+      const selectedUsers = Object.keys(rowSelection).map(rowId => {
+        const index = parseInt(rowId);
+        return currentPageData[index];
+      }).filter(Boolean);
+      
+      setUnEnroll(prev => ({
+        ...prev,
+        usersList: selectedUsers
+      }));
+      
+      console.log("Selected users for unenrollment:", selectedUsers);
+    } else {
+      // Reset usersList when no rows are selected
+      setUnEnroll(prev => ({
+        ...prev,
+        usersList: []
+      }));
+    }
+  }, [rowSelection, currentPageData]);
 
   const handleSort = (key: string) => {
     setSortConfig((prev) => {
@@ -172,16 +196,6 @@ export const RMUsersTable = ({
     if (Object.keys(newSelection).length > 0) {
       setShowNotification(false);
     }
-    
-    // Update the usersList based on selection
-    const selectedRows = Object.keys(newSelection).map(
-      (rowId) => currentPageData[parseInt(rowId)]
-    );
-    
-    setUnEnroll(prev => ({
-      ...prev,
-      usersList: selectedRows
-    }));
   };
 
   const handleSearchButtonClick = () => {
@@ -306,13 +320,7 @@ export const RMUsersTable = ({
                 text: "Export",
                 size: "small",
                 clickEvent: () => {
-                  const selectedRows = Object.keys(rowSelection).map(
-                    (rowId) => currentPageData[parseInt(rowId)]
-                  );
-                  setUnEnroll((prev) => ({
-                    ...prev,
-                    usersList: selectedRows,
-                  }));
+                  console.log("Export button clicked");
                 },
                 id: "primary-button-test-id",
               },

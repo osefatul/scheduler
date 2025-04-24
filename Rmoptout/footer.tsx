@@ -42,6 +42,8 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
   const [isAboveFooter, setIsAboveFooter] = useState(false);
   const [modalIsOpen, setModalIsOpen] = useState(false);
   const [updateEnrollUsers, { isLoading: isEnrollLoading }] = useUpdateenrollUsersMutation();
+  const [isProcessing, setIsProcessing] = useState(false);
+  
   const selectedRowsCount = Object.keys(rowSelection).length;
   
   useEffect(() => {
@@ -70,6 +72,10 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
       return;
     }
     
+    // Prevent multiple submissions
+    if (isProcessing) return;
+    setIsProcessing(true);
+    
     setShowNotification(false);
     
     // Get the selected rows directly from the rowSelection object and usersData
@@ -80,6 +86,7 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
     
     if (selectedRows.length === 0) {
       console.error("No users selected for enrollment");
+      setIsProcessing(false);
       return;
     }
     
@@ -101,6 +108,8 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
     } catch (error) {
       console.error("Error enrolling users:", error);
       onHideNotification(false);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -111,6 +120,14 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
     }
     
     setShowNotification(false);
+    
+    // Get the selected users before opening the modal
+    const selectedUsers = Object.keys(rowSelection).map(rowId => {
+      const index = parseInt(rowId);
+      return usersData.usersList[index];
+    }).filter(Boolean);
+    
+    // Open the modal with selected users
     setModalIsOpen(true);
   };
   
@@ -136,9 +153,9 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
                   handleEnrollUsers();
                 }
               }}
-              disabled={selectedRowsCount === 0}
+              disabled={selectedRowsCount === 0 || isProcessing || isEnrollLoading}
             >
-              {actionType === "unenroll" ? "Unenroll" : "Enroll"}
+              {actionType === "unenroll" ? "Unenroll" : isProcessing ? "Processing..." : "Enroll"}
             </USBButton>
           </RightActions>
         </FooterContainer>

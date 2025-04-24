@@ -80,7 +80,7 @@ export const RMUsersUnEnrollTable = ({
 
   // Update usersList in enroll state when rowSelection changes
   useEffect(() => {
-    if (Object.keys(rowSelection).length > 0 && usersData?.usersList) {
+    if (currentPageData && currentPageData.length > 0) {
       const selectedUsers = Object.keys(rowSelection).map(rowId => {
         const index = parseInt(rowId);
         return currentPageData[index];
@@ -90,8 +90,12 @@ export const RMUsersUnEnrollTable = ({
         ...prev,
         usersList: selectedUsers
       }));
+      
+      if (selectedUsers.length > 0) {
+        console.log("Selected users for enrollment:", selectedUsers);
+      }
     }
-  }, [rowSelection]);
+  }, [rowSelection, currentPageData]);
 
   const handleSort = (key: string) => {
     setSortConfig((prev) => {
@@ -190,26 +194,6 @@ export const RMUsersUnEnrollTable = ({
     // If any checkbox is selected, hide the error message
     if (Object.keys(newSelection).length > 0) {
       setShowNotification(false);
-      
-      // Get the selected users
-      const selectedUsers = Object.keys(newSelection).map(rowId => {
-        const index = parseInt(rowId);
-        return currentPageData[index];
-      }).filter(Boolean);
-      
-      // Update the usersList with the selected users
-      setEnroll(prev => ({
-        ...prev,
-        usersList: selectedUsers
-      }));
-      
-      console.log("Selected users for enrollment:", selectedUsers);
-    } else {
-      // Reset usersList when no rows are selected
-      setEnroll(prev => ({
-        ...prev,
-        usersList: []
-      }));
     }
   };
 
@@ -335,8 +319,8 @@ export const RMUsersUnEnrollTable = ({
                 text: "Export",
                 size: "small",
                 clickEvent: () => {
-                  // This doesn't actually work as expected to get selected users
-                  // So we handle selection directly in handleRowSelectionChange
+                  // This custom action is not needed for updating usersList
+                  // as we now update it directly in the useEffect when rowSelection changes
                   console.log("Export button clicked");
                 },
                 id: "primary-button-test-id-enroll",
