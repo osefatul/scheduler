@@ -1,112 +1,133 @@
+import { useEffect, useState } from "react";
+import {
+  FooterContainer,
+  LeftText,
+  RightActions,
+  RMPageFooter,
+} from "./RMtabfooter.styled";
 import USBButton from "@usb-shield/react-button";
 import RMUnEnroll from "../RMPopup.tsx/RMUnEnrollPopup";
-import { useUpdateEnrollUsersMutation } from "@/internal/services/rmCampaignUsersAPI";
-import { useEffect, useState } from "react";
-import { Spinner } from "../common/Spinner";
-import { RMPageFooter, FooterContainer, LeftText, RightActions } from "./RMTabFooter.styles";
+import { useUpdateenrollUsersMutation } from "@/internal/services/rmcampaignUsersAPI";
+import { Spinner } from "../../spinner";
 
-interface RMtabFooterProps {
-  userData: {
+interface RMtabfooterProps {
+  usersData: {
     campaignId: string;
-    unEnrollReason: string;
-    additionalComments: string;
+    unEnrollReason?: string;
+    additionalComments?: string;
     usersList: {
       userName: string;
       emailId: string;
       companyName: string;
       name: string;
-      usExternalId: string;
+      usbExternalId: string;
       telephoneNumber: string;
     }[];
   };
   actionType: "unenroll" | "enroll";
-  rowSelection: object;
+  rowSelection: Record<string, boolean>;
   setRowSelection: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setShowNotification: React.Dispatch<React.SetStateAction<boolean>>;
-  onHideNotification: (bool:boolean) => void; // Callback function to hide the notification
+  onHideNotification: (bool: boolean) => void;
 }
 
-const RMtabFooter: React.FC<RMtabFooterProps> = ({
+const RMtabfooter: React.FC<RMtabfooterProps> = ({
   rowSelection = {},
   setShowNotification,
-  userData,
+  usersData,
   actionType,
   setRowSelection,
   onHideNotification,
 }) => {
   const [isAboveFooter, setIsAboveFooter] = useState(false);
   const [modalIsOpen, setModalIsOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [updateEnrollUsers, { isLoading: isEnrollLoading }] = useUpdateenrollUsersMutation();
+  
+  const selectedRowsCount = Object.keys(rowSelection).length;
   
   useEffect(() => {
     const handleScroll = () => {
       const scrollHeight = document.documentElement.scrollHeight;
       const scrollTop = window.scrollY;
       const clientHeight = window.innerHeight;
-      
+
       // Check if the user has scrolled near the bottom of the page
-      if ((scrollHeight - (scrollTop + clientHeight)) <= 50) {
+      if (scrollHeight - (scrollTop + clientHeight) <= 50) {
         setIsAboveFooter(true);
       } else {
         setIsAboveFooter(false);
       }
     };
-    
+
     window.addEventListener("scroll", handleScroll);
-    
     return () => {
       window.removeEventListener("scroll", handleScroll);
     };
   }, []);
-  
-  const [updateEnrollUsers] = useUpdateEnrollUsersMutation();
-  
+
   const handleEnrollUsers = async () => {
-    if (Object.keys(rowSelection).length === 0) {
+    if (selectedRowsCount === 0) {
       setShowNotification(true);
       return;
     }
     
-    setIsLoading(true);
+    setShowNotification(false);
+    
+    // Trigger the button click programmatically to get selected users
+    const button = document.getElementById(
+      "button-primary-button-test-id-enroll_usb-table_default--id"
+    );
+
+    if (button) {
+      button.click();
+    }
+    
+    const selectedRows = Object.keys(rowSelection).map(
+      (rowId) => usersData.usersList[parseInt(rowId)]
+    );
+    
+    if (selectedRows.length === 0) {
+      console.error("No users selected");
+      return;
+    }
     
     try {
-      // Get selected rows and prepare data for the API
-      const selectedRowIds = Object.keys(rowSelection);
-      const selectedUsers = selectedRowIds.map(id => {
-        // Find the corresponding data from the userData
-        // This assumes that rows in rowSelection match indices in userData.usersList
-        return userData.usersList[parseInt(id)];
-      });
-      
-      // Create a properly formatted payload
-      const payload = {
-        ...userData,
-        usersList: selectedUsers
+      const enrollData = {
+        ...usersData,
+        usersList: selectedRows,
       };
       
-      // Call the API with the prepared payload
-      const response = await updateEnrollUsers(payload).unwrap();
-      console.log("Enrollment successful:", response);
+      const response = await updateEnrollUsers(enrollData).unwrap();
+      console.log("Enroll response:", response);
       
-      // Clear selections after successful operation
+      // Reset selection after successful enrollment
       setRowSelection({});
-      onHideNotification(false);
-    } catch (error) {
-      console.error("Error during enrollment:", error);
       onHideNotification(true);
-    } finally {
-      setIsLoading(false);
+    } catch (error) {
+      console.error("Error enrolling users:", error);
+      onHideNotification(false);
     }
   };
-  
+
   const handleUnenrollClick = () => {
-    if (Object.keys(rowSelection).length === 0) {
+    if (selectedRowsCount === 0) {
       setShowNotification(true);
       return;
     }
     
-    setModalIsOpen(true);
     setShowNotification(false);
+    
+    // Trigger the button click programmatically
+    const button = document.getElementById(
+      "button-primary-button-test-id_usb-table_default--id"
+    );
+    
+    if (button) {
+      button.click();
+    }
+    
+    // Open the modal for unenroll action
+    setModalIsOpen(true);
   };
   
   const handleUndoSelections = () => {
@@ -116,15 +137,14 @@ const RMtabFooter: React.FC<RMtabFooterProps> = ({
   
   return (
     <>
+      {isEnrollLoading && <Spinner />}
       <RMPageFooter className={isAboveFooter ? "above-footer" : ""}>
         <FooterContainer>
-          <LeftText>Selected {Object.keys(rowSelection).length} users</LeftText>
-          
+          <LeftText>Selected {selectedRowsCount} users</LeftText>
+
           <RightActions>
             <p onClick={handleUndoSelections}>Undo selections</p>
             <USBButton
-              variant="primary"
-              size="medium"
               handleClick={() => {
                 if (actionType === "unenroll") {
                   handleUnenrollClick();
@@ -132,19 +152,19 @@ const RMtabFooter: React.FC<RMtabFooterProps> = ({
                   handleEnrollUsers();
                 }
               }}
-              disabled={Object.keys(rowSelection).length === 0 || isLoading}
+              disabled={selectedRowsCount === 0}
             >
-              {isLoading ? <Spinner /> : actionType === "unenroll" ? "Unenroll" : "Enroll"}
+              {actionType === "unenroll" ? "Unenroll" : "Enroll"}
             </USBButton>
           </RightActions>
         </FooterContainer>
       </RMPageFooter>
-      
+
       <RMUnEnroll
         modalIsOpen={modalIsOpen}
         setShowNotification={setShowNotification}
         setModalIsOpen={setModalIsOpen}
-        userData={userData}
+        usersData={usersData}
         setRowSelection={setRowSelection}
         onHideNotification={onHideNotification}
       />
@@ -152,4 +172,4 @@ const RMtabFooter: React.FC<RMtabFooterProps> = ({
   );
 };
 
-export default RMtabFooter;
+export default RMtabfooter;
