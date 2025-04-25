@@ -52,21 +52,17 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [updateUnenrollUsers, { isLoading }] = useUpdateUnenrollUsersMutation();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [internalUsersData, setInternalUsersData] = useState<any>({
-    ...usersData,
-    usersList: usersData.usersList || []
-  });
+  
+  // Keep our own copy of the usersData
+  const [localUsersData, setLocalUsersData] = useState(usersData);
 
-  // Update internal state when usersData changes
+  // Capture the users data when the modal opens or when usersData changes
   useEffect(() => {
-    if (usersData && usersData.usersList) {
-      setInternalUsersData({
-        ...usersData,
-        usersList: usersData.usersList
-      });
-      console.log("Popup received users data:", usersData.usersList);
+    if (usersData && Array.isArray(usersData.usersList)) {
+      console.log(`Received ${usersData.usersList.length} users in RMUnEnrollPopup`);
+      setLocalUsersData(usersData);
     }
-  }, [usersData]);
+  }, [usersData, modalIsOpen]);
 
   // Reset form when modal is opened
   useEffect(() => {
@@ -75,21 +71,14 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
       setAdditionalComments("");
       setErrorMessage(null);
       setIsSubmitting(false);
-      
-      // Update the internal data whenever modal opens
-      setInternalUsersData({
-        ...usersData,
-        usersList: usersData.usersList || []
-      });
-      
-      console.log("Modal opened with users:", usersData.usersList);
+      console.log(`Modal opened with ${usersData.usersList?.length || 0} users`);
     }
   }, [modalIsOpen, usersData]);
 
   const handleReasonChange = (value: any) => {
-    setSelectedReason(value.inputValue); // Update the selected reason
+    setSelectedReason(value.inputValue);
     if (value.inputValue === "other") {
-      setErrorMessage(null); // Clear the error message when "other" is selected
+      setErrorMessage(null);
     }
     setErrorMessage(null);
   };
@@ -102,7 +91,7 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
   };
 
   // Calculate the length of the usersList
-  const usersListLength = internalUsersData.usersList ? internalUsersData.usersList.length : 0;
+  const usersListLength = localUsersData.usersList?.length || 0;
 
   const handleProceedClick = async () => {
     // Prevent multiple submissions
@@ -124,35 +113,34 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
 
     // Clear error message if validation passes
     setErrorMessage(null);
-    console.log("Current users data:", internalUsersData);
+    console.log("Users to unenroll:", localUsersData.usersList);
     
-    if (!internalUsersData.usersList || internalUsersData.usersList.length === 0) {
+    if (!localUsersData.usersList || localUsersData.usersList.length === 0) {
       console.error("No users selected for unenrollment");
       setIsSubmitting(false);
       return;
     }
 
+    // Create the payload for the API
     const updatedUsersData = {
-      campaignId: internalUsersData.campaignId,
+      campaignId: localUsersData.campaignId,
       unEnrollReason: selectedReason || "",
       additionalComments: additionalComments,
-      usersList: [...internalUsersData.usersList] // Create a new array to avoid reference issues
+      usersList: [...localUsersData.usersList]
     };
 
     try {
       console.log("Sending unenroll data:", JSON.stringify(updatedUsersData));
-      console.log("loading----- before:", isLoading);
-
       const response = await updateUnenrollUsers(updatedUsersData).unwrap();
       console.log("Unenroll response:", response);
-      console.log("loading----- After:", isLoading);
     
       // Reset selection after successful unenrollment
       if (setRowSelection) {
         setRowSelection({});
       }
-      localStorage.setItem("unEnrollCount", usersListLength.toString()); // Store the data in local storage
-      onResponseNotification(true); // Pass the user count
+      
+      localStorage.setItem("unEnrollCount", usersListLength.toString());
+      onResponseNotification(true);
   
       setModalIsOpen(false);
       setShowNotification(false);
