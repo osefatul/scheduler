@@ -54,7 +54,9 @@ export const RMUsersUnEnrollTable = ({
     pageIndex: 0,
     pageSize: 10,
   });
-  const [selectedIndexMap, setSelectedIndexMap] = useState<Record<number, any[]>>({});
+  
+  // Track selected users across all pages
+  const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
 
   const [enroll, setEnroll] = useState<{
     campaignId: string;
@@ -164,43 +166,6 @@ export const RMUsersUnEnrollTable = ({
     return tableData.slice(startIndex, startIndex + pageSize);
   }, [tableData, pageIndex, pageSize]);
 
-  // Now we can use currentPageData in useEffect
-  useEffect(() => {
-    if (currentPageData && currentPageData.length > 0) {
-      const selectedUsers = Object.keys(rowSelection)
-        .map((rowId) => {
-          const index = parseInt(rowId);
-          return currentPageData[index];
-        })
-        .filter(Boolean);
-      
-      // Save current page selections
-      if (selectedUsers.length > 0) {
-        setSelectedIndexMap(prev => ({
-          ...prev,
-          [pageIndex]: selectedUsers
-        }));
-      }
-      
-      // Combine all selected users across pages
-      const allSelectedUsers = Object.values(selectedIndexMap).flat();
-      const combinedSelections = [...allSelectedUsers, ...selectedUsers]
-        // Remove duplicates (using userName as unique identifier)
-        .filter((user, index, self) => 
-          index === self.findIndex(u => u.userName === user.userName)
-        );
-      
-      setEnroll(prev => ({
-        ...prev,
-        usersList: combinedSelections
-      }));
-      
-      if (combinedSelections.length > 0) {
-        console.log("Selected users for enrollment:", combinedSelections);
-      }
-    }
-  }, [rowSelection, currentPageData, pageIndex]);
-
   // Update _data when tableData or pagination changes
   useEffect(() => {
     setData(currentPageData);
@@ -212,44 +177,83 @@ export const RMUsersUnEnrollTable = ({
     const updatedSelection =
       typeof newSelection === "function" ? newSelection(rowSelection) : newSelection;
   
-    console.log("Row selection changed:", updatedSelection); // Debugging log
-    console.log("Type of updatedSelection:", typeof updatedSelection); // Check the type
-    console.log("Keys in updatedSelection:", Object.keys(updatedSelection || {})); // Check the keys
+    console.log("Row selection changed:", updatedSelection); 
+    console.log("Type of updatedSelection:", typeof updatedSelection);
+    console.log("Keys in updatedSelection:", Object.keys(updatedSelection || {}));
   
     // Update the rowSelection state
     setRowSelection(updatedSelection);
   
     // If any checkbox is selected, hide the error message
     if (Object.keys(updatedSelection).length > 0) {
-      console.log("Selected rows:", updatedSelection);
       setShowNotification(false);
     }
+    
+    // CRITICAL FIX: Map selections to actual users using the current page data
+    const newSelectedUsers = Object.keys(updatedSelection)
+      .filter(key => updatedSelection[key]) // Only include selected rows
+      .map(rowId => {
+        const index = parseInt(rowId);
+        // Use currentPageData to get the actual user object
+        if (index >= 0 && index < currentPageData.length) {
+          return currentPageData[index];
+        }
+        return null;
+      })
+      .filter(Boolean);
+    
+    console.log("New selected users from current page:", newSelectedUsers);
+    
+    // Update the complete list of selected users
+    const updatedUsers = [...selectedUsers];
+    
+    // Add newly selected users
+    newSelectedUsers.forEach(user => {
+      if (!updatedUsers.some(u => u.userName === user.userName)) {
+        updatedUsers.push(user);
+      }
+    });
+    
+    // Remove deselected users from the current page
+    const currentPageUsernames = currentPageData.map(user => user.userName);
+    const selectedUsernames = Object.keys(updatedSelection)
+      .filter(key => updatedSelection[key])
+      .map(rowId => {
+        const index = parseInt(rowId);
+        return index >= 0 && index < currentPageData.length ? currentPageData[index].userName : null;
+      })
+      .filter(Boolean);
+    
+    const finalUsers = updatedUsers.filter(user => {
+      // Keep users not on current page
+      if (!currentPageUsernames.includes(user.userName)) {
+        return true;
+      }
+      // For users on current page, only keep if still selected
+      return selectedUsernames.includes(user.userName);
+    });
+    
+    setSelectedUsers(finalUsers);
+    
+    // Update the enroll state with the selected users
+    setEnroll(prev => ({
+      ...prev,
+      usersList: finalUsers
+    }));
+    
+    console.log("Updated full selected users list:", finalUsers);
   };
 
   // Handle page change
   const handlePageChange = (newPage: number) => {
-    // Save current page selections before changing page
-    if (Object.keys(rowSelection).length > 0) {
-      const currentSelections = Object.keys(rowSelection)
-        .map(rowId => {
-          const index = parseInt(rowId);
-          return currentPageData[index];
-        })
-        .filter(Boolean);
-      
-      setSelectedIndexMap(prev => ({
-        ...prev,
-        [pageIndex]: currentSelections
-      }));
-    }
-    
     // Change page
     setPagination(prev => ({
       ...prev,
       pageIndex: newPage - 1,
     }));
     
-    // Clear current page selection state
+    // Reset the current page's row selection state (visual checkboxes)
+    // but maintain the overall selected users list
     setRowSelection({});
   };
 
@@ -274,50 +278,24 @@ export const RMUsersUnEnrollTable = ({
     controlled: true,
     handleForwardClick: () => {
       // Save current page selections before going forward
-      if (Object.keys(rowSelection).length > 0) {
-        const currentSelections = Object.keys(rowSelection)
-          .map(rowId => {
-            const index = parseInt(rowId);
-            return currentPageData[index];
-          })
-          .filter(Boolean);
-        
-        setSelectedIndexMap(prev => ({
-          ...prev,
-          [pageIndex]: currentSelections
-        }));
-      }
-
+      // Move to next page
       setPagination((prev) => ({
         ...prev,
         pageIndex: prev.pageIndex + 1
       }));
       
-      // Clear row selection for the new page
+      // Clear row selection for the new page (visual only)
       setRowSelection({});
     },
     handleBackwardClick: () => {
       // Save current page selections before going backward
-      if (Object.keys(rowSelection).length > 0) {
-        const currentSelections = Object.keys(rowSelection)
-          .map(rowId => {
-            const index = parseInt(rowId);
-            return currentPageData[index];
-          })
-          .filter(Boolean);
-        
-        setSelectedIndexMap(prev => ({
-          ...prev,
-          [pageIndex]: currentSelections
-        }));
-      }
-
+      // Move to previous page
       setPagination((prev) => ({
         ...prev,
         pageIndex: Math.max(prev.pageIndex - 1, 0),
       }));
       
-      // Clear row selection for the new page
+      // Clear row selection for the new page (visual only)
       setRowSelection({});
     },
   };
@@ -344,11 +322,14 @@ export const RMUsersUnEnrollTable = ({
     setTest(temp);
 
     if (temp.length === 0) {
-      console.log("No matching records founddsadsdsd");
+      console.log("No matching records found");
     }
     setFilteredData(temp);
     setPagination((prev) => ({ ...prev, pageIndex: 0 })); // Reset to the first page
     setIsdata(true);
+    
+    // Maintain selections after search
+    setRowSelection({});
   };
 
   // Show loading spinner while data is being fetched
@@ -443,11 +424,14 @@ export const RMUsersUnEnrollTable = ({
           </RMPagination>
 
           <RMtabfooter
-            usersData={enroll}
+            usersData={{
+              campaignId: enroll.campaignId,
+              usersList: selectedUsers // Pass the complete list of selected users
+            }}
             actionType="enroll"
             setRowSelection={setRowSelection}
             onResponseNotification={(bool: boolean) =>
-              onResponseNotification(bool, "enroll", enroll.usersList.length)
+              onResponseNotification(bool, "enroll", selectedUsers.length)
             }
             rowSelection={rowSelection}
             setShowNotification={setShowNotification}

@@ -1,5 +1,5 @@
 import USBTable from "@usb-shield/react-table";
-import { useState, useMemo, useEffect,  } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { getCoreRowModel } from "@tanstack/react-table";
 import { useGetCampaignEnrollUsersByIdQuery } from "@/internal/services/rmcampaignUsersAPI";
 import RMtabfooter from "../RMTabFooter/RMtabfooter";
@@ -55,7 +55,9 @@ export const RMUsersTable = ({
     pageIndex: 0,
     pageSize: 10,
   });
-  const [selectedIndexMap, setSelectedIndexMap] = useState<Record<number, any[]>>({});
+
+  // Track the full list of selected users across pages
+  const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
 
   const [unEnroll, setUnEnroll] = useState<{
     campaignId: string;
@@ -160,50 +162,12 @@ export const RMUsersTable = ({
     return tableData.slice(startIndex, startIndex + pageSize);
   }, [tableData, pageIndex, pageSize]);
 
-  // Now we can use currentPageData in useEffect
-  useEffect(() => {
-    if (Object.keys(rowSelection).length > 0 && currentPageData) {
-      const selectedUsers = Object.keys(rowSelection)
-        .map((rowId) => {
-          const index = parseInt(rowId);
-          return currentPageData[index];
-        })
-        .filter(Boolean);
-
-      // Save current page selections
-      setSelectedIndexMap(prev => ({
-        ...prev,
-        [pageIndex]: selectedUsers
-      }));
-
-      // Combine all selected users across pages
-      const allSelectedUsers = Object.values(selectedIndexMap).flat();
-      const combinedSelections = [...allSelectedUsers, ...selectedUsers]
-        // Remove duplicates (using userName as unique identifier)
-        .filter((user, index, self) => 
-          index === self.findIndex(u => u.userName === user.userName)
-        );
-
-      setUnEnroll((prev) => ({
-        ...prev,
-        usersList: combinedSelections,
-      }));
-
-      console.log("Selected users for unenrollment:", combinedSelections);
-    }
-  }, [rowSelection, currentPageData, pageIndex]);
-
   // Update _data when tableData or pagination changes
   useEffect(() => {
     setData(currentPageData);
-    
-    // Option 1: Clear selection when changing page (uncomment if you want this behavior)
-    // setRowSelection({});
-    
-    // Option 2: Keep track of selections across pages (this is implemented via selectedIndexMap)
   }, [currentPageData]);
 
-  // Handle checkbox selection
+  // Handle checkbox selection and update usersList
   const handleRowSelectionChange = (newSelection: any) => {
     // Check if newSelection is a function and call it with the current state
     const updatedSelection =
@@ -215,38 +179,77 @@ export const RMUsersTable = ({
   
     // Update the rowSelection state
     setRowSelection(updatedSelection);
-  
+    
     // If any checkbox is selected, hide the error message
     if (Object.keys(updatedSelection).length > 0) {
-      console.log("Selected rows:", updatedSelection);
       setShowNotification(false);
     }
+    
+    // CRITICAL FIX: Map selections to actual users using the current page data
+    const newSelectedUsers = Object.keys(updatedSelection)
+      .filter(key => updatedSelection[key]) // Only include selected rows
+      .map(rowId => {
+        const index = parseInt(rowId);
+        // Use currentPageData to get the actual user object
+        if (index >= 0 && index < currentPageData.length) {
+          return currentPageData[index];
+        }
+        return null;
+      })
+      .filter(Boolean);
+    
+    console.log("New selected users from current page:", newSelectedUsers);
+    
+    // Update the complete list of selected users
+    const updatedUsers = [...selectedUsers];
+    
+    // Add newly selected users
+    newSelectedUsers.forEach(user => {
+      if (!updatedUsers.some(u => u.userName === user.userName)) {
+        updatedUsers.push(user);
+      }
+    });
+    
+    // Remove deselected users from the current page
+    const currentPageUsernames = currentPageData.map(user => user.userName);
+    const selectedUsernames = Object.keys(updatedSelection)
+      .filter(key => updatedSelection[key])
+      .map(rowId => {
+        const index = parseInt(rowId);
+        return index >= 0 && index < currentPageData.length ? currentPageData[index].userName : null;
+      })
+      .filter(Boolean);
+    
+    const finalUsers = updatedUsers.filter(user => {
+      // Keep users not on current page
+      if (!currentPageUsernames.includes(user.userName)) {
+        return true;
+      }
+      // For users on current page, only keep if still selected
+      return selectedUsernames.includes(user.userName);
+    });
+    
+    setSelectedUsers(finalUsers);
+    
+    // Update the unEnroll state with the selected users
+    setUnEnroll(prev => ({
+      ...prev,
+      usersList: finalUsers
+    }));
+    
+    console.log("Updated full selected users list:", finalUsers);
   };
 
   // Handle page change
   const handlePageChange = (newPage: number) => {
-    // Save current page selections before changing page
-    if (Object.keys(rowSelection).length > 0) {
-      const currentSelections = Object.keys(rowSelection)
-        .map(rowId => {
-          const index = parseInt(rowId);
-          return currentPageData[index];
-        })
-        .filter(Boolean);
-      
-      setSelectedIndexMap(prev => ({
-        ...prev,
-        [pageIndex]: currentSelections
-      }));
-    }
-    
     // Change page
     setPagination(prev => ({
       ...prev,
       pageIndex: newPage - 1,
     }));
     
-    // Clear current page selection state
+    // Reset the current page's row selection state (visual checkboxes)
+    // but maintain the overall selected users list
     setRowSelection({});
   };
 
@@ -270,51 +273,23 @@ export const RMUsersTable = ({
   const controlOptions: ControlOptions = {
     controlled: true,
     handleForwardClick: () => {
-      // Save current page selections before going forward
-      if (Object.keys(rowSelection).length > 0) {
-        const currentSelections = Object.keys(rowSelection)
-          .map(rowId => {
-            const index = parseInt(rowId);
-            return currentPageData[index];
-          })
-          .filter(Boolean);
-        
-        setSelectedIndexMap(prev => ({
-          ...prev,
-          [pageIndex]: currentSelections
-        }));
-      }
-
+      // Move to next page
       setPagination((prev) => ({ 
         ...prev, 
         pageIndex: prev.pageIndex + 1 
       }));
       
-      // Clear row selection for the new page
+      // Clear row selection for the new page (visual only)
       setRowSelection({});
     },
     handleBackwardClick: () => {
-      // Save current page selections before going backward
-      if (Object.keys(rowSelection).length > 0) {
-        const currentSelections = Object.keys(rowSelection)
-          .map(rowId => {
-            const index = parseInt(rowId);
-            return currentPageData[index];
-          })
-          .filter(Boolean);
-        
-        setSelectedIndexMap(prev => ({
-          ...prev,
-          [pageIndex]: currentSelections
-        }));
-      }
-
+      // Move to previous page
       setPagination((prev) => ({
         ...prev,
         pageIndex: Math.max(prev.pageIndex - 1, 0),
       }));
       
-      // Clear row selection for the new page
+      // Clear row selection for the new page (visual only)
       setRowSelection({});
     },
   };
@@ -338,20 +313,24 @@ export const RMUsersTable = ({
       );
     });
     console.log(temp, "filterdata");
-    setTest(temp)
+    setTest(temp);
 
     if (temp.length === 0) {
-      console.log("No matching records founddsadsdsd");
+      console.log("No matching records found");
     }
     setFilteredData(temp);
     setPagination((prev) => ({ ...prev, pageIndex: 0 })); // Reset to the first page
-    setIsdata(true)
+    setIsdata(true);
+    
+    // Maintain selections after search
+    setRowSelection({});
   };
 
   // Optional: Add a useEffect to log changes to unEnroll
   useEffect(() => {
     console.log("Unenroll state updated:", unEnroll);
   }, [unEnroll, rowSelection]);
+  
   // Render loading state conditionally
   if (isDataLoading) {
     return <Spinner />;
@@ -445,7 +424,10 @@ export const RMUsersTable = ({
           </RMPagination>
 
           <RMtabfooter
-            usersData={unEnroll}
+            usersData={{
+              ...unEnroll,
+              usersList: selectedUsers // Pass the complete list of selected users
+            }}
             actionType="unenroll"
             setRowSelection={setRowSelection}
             onResponseNotification={onResponseNotification}
