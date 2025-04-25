@@ -79,43 +79,6 @@ export const RMUsersUnEnrollTable = ({
     }));
   }, [campaignId]);
 
-  // Track selected users across pagination
-  useEffect(() => {
-    if (currentPageData && currentPageData.length > 0) {
-      const selectedUsers = Object.keys(rowSelection)
-        .map((rowId) => {
-          const index = parseInt(rowId);
-          return currentPageData[index];
-        })
-        .filter(Boolean);
-      
-      // Save current page selections
-      if (selectedUsers.length > 0) {
-        setSelectedIndexMap(prev => ({
-          ...prev,
-          [pageIndex]: selectedUsers
-        }));
-      }
-      
-      // Combine all selected users across pages
-      const allSelectedUsers = Object.values(selectedIndexMap).flat();
-      const combinedSelections = [...allSelectedUsers, ...selectedUsers]
-        // Remove duplicates (using userName as unique identifier)
-        .filter((user, index, self) => 
-          index === self.findIndex(u => u.userName === user.userName)
-        );
-      
-      setEnroll(prev => ({
-        ...prev,
-        usersList: combinedSelections
-      }));
-      
-      if (combinedSelections.length > 0) {
-        console.log("Selected users for enrollment:", combinedSelections);
-      }
-    }
-  }, [rowSelection, currentPageData]);
-
   const handleSort = (key: string) => {
     setSortConfig((prev) => {
       if (prev?.key === key) {
@@ -200,6 +163,43 @@ export const RMUsersUnEnrollTable = ({
     const startIndex = pageIndex * pageSize;
     return tableData.slice(startIndex, startIndex + pageSize);
   }, [tableData, pageIndex, pageSize]);
+
+  // Now we can use currentPageData in useEffect
+  useEffect(() => {
+    if (currentPageData && currentPageData.length > 0) {
+      const selectedUsers = Object.keys(rowSelection)
+        .map((rowId) => {
+          const index = parseInt(rowId);
+          return currentPageData[index];
+        })
+        .filter(Boolean);
+      
+      // Save current page selections
+      if (selectedUsers.length > 0) {
+        setSelectedIndexMap(prev => ({
+          ...prev,
+          [pageIndex]: selectedUsers
+        }));
+      }
+      
+      // Combine all selected users across pages
+      const allSelectedUsers = Object.values(selectedIndexMap).flat();
+      const combinedSelections = [...allSelectedUsers, ...selectedUsers]
+        // Remove duplicates (using userName as unique identifier)
+        .filter((user, index, self) => 
+          index === self.findIndex(u => u.userName === user.userName)
+        );
+      
+      setEnroll(prev => ({
+        ...prev,
+        usersList: combinedSelections
+      }));
+      
+      if (combinedSelections.length > 0) {
+        console.log("Selected users for enrollment:", combinedSelections);
+      }
+    }
+  }, [rowSelection, currentPageData, pageIndex]);
 
   // Update _data when tableData or pagination changes
   useEffect(() => {
@@ -341,14 +341,14 @@ export const RMUsersUnEnrollTable = ({
       );
     });
     console.log(temp, "filterdata");
-    setTest(temp)
+    setTest(temp);
 
     if (temp.length === 0) {
       console.log("No matching records founddsadsdsd");
     }
     setFilteredData(temp);
     setPagination((prev) => ({ ...prev, pageIndex: 0 })); // Reset to the first page
-    setIsdata(true)
+    setIsdata(true);
   };
 
   // Show loading spinner while data is being fetched

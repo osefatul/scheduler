@@ -82,50 +82,6 @@ export const RMUsersTable = ({
     }));
   }, [campaignId]);
 
-  // Track selected users across pagination
-  useEffect(() => {
-    if (Object.keys(rowSelection).length > 0 && currentPageData) {
-      const selectedUsers = Object.keys(rowSelection)
-        .map((rowId) => {
-          const index = parseInt(rowId);
-          return currentPageData[index];
-        })
-        .filter(Boolean);
-
-      // Save current page selections
-      setSelectedIndexMap(prev => ({
-        ...prev,
-        [pageIndex]: selectedUsers
-      }));
-
-      // Combine all selected users across pages
-      const allSelectedUsers = Object.values(selectedIndexMap).flat();
-      const currentPageSelections = selectedUsers.filter(Boolean);
-      const combinedSelections = [...allSelectedUsers, ...currentPageSelections]
-        // Remove duplicates (using userName as unique identifier)
-        .filter((user, index, self) => 
-          index === self.findIndex(u => u.userName === user.userName)
-        );
-
-      setUnEnroll((prev) => ({
-        ...prev,
-        usersList: combinedSelections,
-      }));
-
-      console.log("Selected users for unenrollment:", combinedSelections);
-    }
-  }, [rowSelection, currentPageData]);
-
-  // Update table data when page changes
-  useEffect(() => {
-    setData(currentPageData);
-    
-    // Option 1: Clear selection when changing page (uncomment if you want this behavior)
-    // setRowSelection({});
-    
-    // Option 2: Keep track of selections across pages (this is implemented via selectedIndexMap)
-  }, [currentPageData]);
-
   const handleSort = (key: string) => {
     setSortConfig((prev) => {
       if (prev?.key === key) {
@@ -203,6 +159,49 @@ export const RMUsersTable = ({
     const startIndex = pageIndex * pageSize;
     return tableData.slice(startIndex, startIndex + pageSize);
   }, [tableData, pageIndex, pageSize]);
+
+  // Now we can use currentPageData in useEffect
+  useEffect(() => {
+    if (Object.keys(rowSelection).length > 0 && currentPageData) {
+      const selectedUsers = Object.keys(rowSelection)
+        .map((rowId) => {
+          const index = parseInt(rowId);
+          return currentPageData[index];
+        })
+        .filter(Boolean);
+
+      // Save current page selections
+      setSelectedIndexMap(prev => ({
+        ...prev,
+        [pageIndex]: selectedUsers
+      }));
+
+      // Combine all selected users across pages
+      const allSelectedUsers = Object.values(selectedIndexMap).flat();
+      const combinedSelections = [...allSelectedUsers, ...selectedUsers]
+        // Remove duplicates (using userName as unique identifier)
+        .filter((user, index, self) => 
+          index === self.findIndex(u => u.userName === user.userName)
+        );
+
+      setUnEnroll((prev) => ({
+        ...prev,
+        usersList: combinedSelections,
+      }));
+
+      console.log("Selected users for unenrollment:", combinedSelections);
+    }
+  }, [rowSelection, currentPageData, pageIndex]);
+
+  // Update _data when tableData or pagination changes
+  useEffect(() => {
+    setData(currentPageData);
+    
+    // Option 1: Clear selection when changing page (uncomment if you want this behavior)
+    // setRowSelection({});
+    
+    // Option 2: Keep track of selections across pages (this is implemented via selectedIndexMap)
+  }, [currentPageData]);
 
   // Handle checkbox selection
   const handleRowSelectionChange = (newSelection: any) => {
