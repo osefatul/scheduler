@@ -25,10 +25,14 @@ interface RMtabfooterProps {
     }[];
   };
   actionType: "unenroll" | "enroll";
-  rowSelection: Record<string, boolean>;
+  rowSelection: object;
   setRowSelection: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setShowNotification: React.Dispatch<React.SetStateAction<boolean>>;
-  onHideNotification: (bool: boolean) => void;
+  onResponseNotification: (
+    bool: boolean,
+    action?: string,
+    count?: number
+  ) => void;
 }
 
 const RMtabfooter: React.FC<RMtabfooterProps> = ({
@@ -37,15 +41,34 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
   usersData,
   actionType,
   setRowSelection,
-  onHideNotification,
+  onResponseNotification,
 }) => {
   const [isAboveFooter, setIsAboveFooter] = useState(false);
   const [modalIsOpen, setModalIsOpen] = useState(false);
-  const [updateEnrollUsers, { isLoading: isEnrollLoading }] = useUpdateenrollUsersMutation();
+  const [updateEnrollUsers, { isLoading: isEnrollLoading }] =
+    useUpdateenrollUsersMutation();
   const [isProcessing, setIsProcessing] = useState(false);
-  
+  const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
+
   const selectedRowsCount = Object.keys(rowSelection).length;
-  
+
+  // Update selectedUsers when rowSelection changes
+  useEffect(() => {
+    if (selectedRowsCount > 0 && usersData.usersList && usersData.usersList.length > 0) {
+      const selectedUsersList = Object.keys(rowSelection)
+        .map((rowId) => {
+          const index = parseInt(rowId);
+          return usersData.usersList[index];
+        })
+        .filter(Boolean);
+      
+      setSelectedUsers(selectedUsersList);
+      console.log("Selected users updated:", selectedUsersList);
+    } else {
+      setSelectedUsers([]);
+    }
+  }, [rowSelection, usersData]);
+
   useEffect(() => {
     const handleScroll = () => {
       const scrollHeight = document.documentElement.scrollHeight;
@@ -67,47 +90,46 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
   }, []);
 
   const handleEnrollUsers = async () => {
+    console.log("Selected rows count:", selectedRowsCount);
     if (selectedRowsCount === 0) {
       setShowNotification(true);
       return;
     }
-    
+
     // Prevent multiple submissions
     if (isProcessing) return;
     setIsProcessing(true);
-    
+
     setShowNotification(false);
-    
-    // Get the selected rows directly from the rowSelection object and usersData
-    const selectedRows = Object.keys(rowSelection).map(rowId => {
-      const index = parseInt(rowId);
-      return usersData.usersList[index];
-    }).filter(Boolean); // Filter out any undefined values
-    
-    if (selectedRows.length === 0) {
+
+    // Use the selectedUsers state that we maintain
+    if (selectedUsers.length === 0) {
       console.error("No users selected for enrollment");
       setIsProcessing(false);
       return;
     }
-    
+
     try {
-      // Create a deep copy of the request to avoid reference issues
       const enrollData = {
         campaignId: usersData.campaignId,
-        usersList: [...selectedRows] // Explicitly create a new array with the selected users
+        usersList: [...selectedUsers],
       };
-      
+
       console.log("Sending enrollment data:", JSON.stringify(enrollData));
-      
+
       const response = await updateEnrollUsers(enrollData).unwrap();
       console.log("Enroll response:", response);
-      
+      localStorage.setItem(
+        "enrollCount",
+        enrollData.usersList.length.toString()
+      ); // Store the data in local storage
+
       // Reset selection after successful enrollment
       setRowSelection({});
-      onHideNotification(true);
+      onResponseNotification(true, "enroll", enrollData.usersList.length); // Pass the user count
     } catch (error) {
       console.error("Error enrolling users:", error);
-      onHideNotification(false);
+      onResponseNotification(true, "enroll", 0); // Pass the user count
     } finally {
       setIsProcessing(false);
     }
@@ -118,24 +140,18 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
       setShowNotification(true);
       return;
     }
-    
+
     setShowNotification(false);
     
-    // Get the selected users before opening the modal
-    const selectedUsers = Object.keys(rowSelection).map(rowId => {
-      const index = parseInt(rowId);
-      return usersData.usersList[index];
-    }).filter(Boolean);
-    
-    // Open the modal with selected users
+    // Open the modal
     setModalIsOpen(true);
   };
-  
+
   const handleUndoSelections = () => {
     setRowSelection({});
     setShowNotification(false);
   };
-  
+
   return (
     <>
       {isEnrollLoading && <Spinner />}
@@ -153,9 +169,13 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
                   handleEnrollUsers();
                 }
               }}
-              disabled={selectedRowsCount === 0 || isProcessing || isEnrollLoading}
+              // disabled={selectedRowsCount === 0 || isProcessing || isEnrollLoading}
             >
-              {actionType === "unenroll" ? "Unenroll" : isProcessing ? "Processing..." : "Enroll"}
+              {actionType === "unenroll"
+                ? "Unenroll"
+                : isProcessing
+                ? "Processing..."
+                : "Enroll"}
             </USBButton>
           </RightActions>
         </FooterContainer>
@@ -167,13 +187,10 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
         setModalIsOpen={setModalIsOpen}
         usersData={{
           ...usersData,
-          usersList: Object.keys(rowSelection).map(rowId => {
-            const index = parseInt(rowId);
-            return usersData.usersList[index];
-          }).filter(Boolean) // Make sure we only pass selected users to the modal
+          usersList: selectedUsers, // Use our maintained selectedUsers list
         }}
         setRowSelection={setRowSelection}
-        onHideNotification={onHideNotification}
+        onResponseNotification={onResponseNotification}
       />
     </>
   );

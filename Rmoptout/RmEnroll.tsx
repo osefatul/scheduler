@@ -1,18 +1,18 @@
 import USBTable from "@usb-shield/react-table";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect,  } from "react";
 import { getCoreRowModel } from "@tanstack/react-table";
 import { useGetCampaignEnrollUsersByIdQuery } from "@/internal/services/rmcampaignUsersAPI";
 import RMtabfooter from "../RMTabFooter/RMtabfooter";
 import { RMPagination } from "../RMoptoutcampaignList/RMoptoutcampaignList.styled";
 import USBPagination from "@usb-shield/react-pagination";
 import USBButton from "@usb-shield/react-button";
-import USBSearchInput from '@usb-shield/react-search-input';
+import USBSearchInput from "@usb-shield/react-search-input";
 import { RMsearch } from "../RMSearchUsers/RMSearchUsers.styles";
 import {
   StyledParagraph,
   BannerPreview,
   NoBannerWrapper,
-  NoRMCampainWrapper
+  NoRMCampainWrapper,
 } from "../RMOptflowCommon.styled";
 import { RMStyledTableWrapper } from "./RMEnrollUserstable.styles";
 import { USBIconSort, USBIconInfo } from "@usb-shield/react-icons";
@@ -27,35 +27,36 @@ interface ControlOptions {
 
 export const RMUsersTable = ({
   campaignId,
-  onHideNotification,
+  onResponseNotification,
   setShowNotification,
 }: {
   campaignId: string;
-  onHideNotification: (bool: boolean) => void;
+  onResponseNotification: (bool: boolean) => void;
   setShowNotification: React.Dispatch<React.SetStateAction<boolean>>;
 }) => {
   // Only call the query if campaignId is not empty
-  const { data: usersData, isLoading: isDataLoading } = useGetCampaignEnrollUsersByIdQuery(campaignId, {
-    skip: !campaignId,
-  });
-  
+  const { data: usersData, isLoading: isDataLoading } =
+    useGetCampaignEnrollUsersByIdQuery(campaignId, {
+      skip: !campaignId,
+    });
+
   const [sortConfig, setSortConfig] = useState<{
     key: string;
     direction: "asc" | "desc";
   } | null>(null);
-  
+
   const [searchInputValue, setSearchInputValue] = useState("");
   const [filteredData, setFilteredData] = useState<any>([]);
   const [_data, setData] = useState<any>([]);
-  const [test, setTest] = useState('');
+  const [test, setTest] = useState<any[]>([]);
   const [isdata, setIsdata] = useState(false);
   const [rowSelection, setRowSelection] = useState<Record<string, boolean>>({});
   const [{ pageIndex, pageSize }, setPagination] = useState({
     pageIndex: 0,
     pageSize: 10,
   });
-  
-  // Initialize with an empty array for usersList
+  const [selectedIndexMap, setSelectedIndexMap] = useState<Record<number, any[]>>({});
+
   const [unEnroll, setUnEnroll] = useState<{
     campaignId: string;
     unEnrollReason: string;
@@ -68,43 +69,62 @@ export const RMUsersTable = ({
     usersList: [],
   });
 
-  // Initialize filteredData when usersData is loaded
   useEffect(() => {
     if (usersData?.usersList) {
       setFilteredData(usersData.usersList);
     }
   }, [usersData]);
 
-  // Update unEnroll state when campaignId changes
   useEffect(() => {
-    setUnEnroll(prev => ({
+    setUnEnroll((prev) => ({
       ...prev,
-      campaignId: campaignId
+      campaignId: campaignId,
     }));
   }, [campaignId]);
-  
-  // Update usersList in unEnroll state when rowSelection changes
+
+  // Track selected users across pagination
   useEffect(() => {
     if (Object.keys(rowSelection).length > 0 && currentPageData) {
-      const selectedUsers = Object.keys(rowSelection).map(rowId => {
-        const index = parseInt(rowId);
-        return currentPageData[index];
-      }).filter(Boolean);
-      
-      setUnEnroll(prev => ({
+      const selectedUsers = Object.keys(rowSelection)
+        .map((rowId) => {
+          const index = parseInt(rowId);
+          return currentPageData[index];
+        })
+        .filter(Boolean);
+
+      // Save current page selections
+      setSelectedIndexMap(prev => ({
         ...prev,
-        usersList: selectedUsers
+        [pageIndex]: selectedUsers
       }));
-      
-      console.log("Selected users for unenrollment:", selectedUsers);
-    } else {
-      // Reset usersList when no rows are selected
-      setUnEnroll(prev => ({
+
+      // Combine all selected users across pages
+      const allSelectedUsers = Object.values(selectedIndexMap).flat();
+      const currentPageSelections = selectedUsers.filter(Boolean);
+      const combinedSelections = [...allSelectedUsers, ...currentPageSelections]
+        // Remove duplicates (using userName as unique identifier)
+        .filter((user, index, self) => 
+          index === self.findIndex(u => u.userName === user.userName)
+        );
+
+      setUnEnroll((prev) => ({
         ...prev,
-        usersList: []
+        usersList: combinedSelections,
       }));
+
+      console.log("Selected users for unenrollment:", combinedSelections);
     }
   }, [rowSelection, currentPageData]);
+
+  // Update table data when page changes
+  useEffect(() => {
+    setData(currentPageData);
+    
+    // Option 1: Clear selection when changing page (uncomment if you want this behavior)
+    // setRowSelection({});
+    
+    // Option 2: Keep track of selections across pages (this is implemented via selectedIndexMap)
+  }, [currentPageData]);
 
   const handleSort = (key: string) => {
     setSortConfig((prev) => {
@@ -157,13 +177,14 @@ export const RMUsersTable = ({
   );
 
   const tableData = useMemo(() => {
-    let data = filteredData.length > 0 ? filteredData : usersData?.usersList || [];
-    
+    let data =
+      filteredData.length > 0 ? filteredData : usersData?.usersList || [];
+
     if (sortConfig) {
       data = [...data].sort((a, b) => {
-        const aValue = a[sortConfig.key] || '';
-        const bValue = b[sortConfig.key] || '';
-        
+        const aValue = a[sortConfig.key] || "";
+        const bValue = b[sortConfig.key] || "";
+
         if (aValue < bValue) {
           return sortConfig.direction === "asc" ? -1 : 1;
         }
@@ -173,7 +194,7 @@ export const RMUsersTable = ({
         return 0;
       });
     }
-    
+
     return data;
   }, [usersData, filteredData, sortConfig]);
 
@@ -183,44 +204,51 @@ export const RMUsersTable = ({
     return tableData.slice(startIndex, startIndex + pageSize);
   }, [tableData, pageIndex, pageSize]);
 
-  // Update _data when tableData or pagination changes
-  useEffect(() => {
-    setData(currentPageData);
-  }, [currentPageData]);
-
-  // Handle checkbox selection and update usersList
-  const handleRowSelectionChange = (newSelection: Record<string, boolean>) => {
-    setRowSelection(newSelection);
-    
+  // Handle checkbox selection
+  const handleRowSelectionChange = (newSelection: any) => {
+    // Check if newSelection is a function and call it with the current state
+    const updatedSelection =
+      typeof newSelection === "function" ? newSelection(rowSelection) : newSelection;
+  
+    console.log("Row selection changed:", updatedSelection); // Debugging log
+    console.log("Type of updatedSelection:", typeof updatedSelection); // Check the type
+    console.log("Keys in updatedSelection:", Object.keys(updatedSelection || {})); // Check the keys
+  
+    // Update the rowSelection state
+    setRowSelection(updatedSelection);
+  
     // If any checkbox is selected, hide the error message
-    if (Object.keys(newSelection).length > 0) {
+    if (Object.keys(updatedSelection).length > 0) {
+      console.log("Selected rows:", updatedSelection);
       setShowNotification(false);
     }
   };
 
-  const handleSearchButtonClick = () => {
-    if (!searchInputValue) {
-      // If search input is empty, reset to show all records
-      setFilteredData(usersData?.usersList || []);
-      setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-      setIsdata(false);
-      return;
+  // Handle page change
+  const handlePageChange = (newPage: number) => {
+    // Save current page selections before changing page
+    if (Object.keys(rowSelection).length > 0) {
+      const currentSelections = Object.keys(rowSelection)
+        .map(rowId => {
+          const index = parseInt(rowId);
+          return currentPageData[index];
+        })
+        .filter(Boolean);
+      
+      setSelectedIndexMap(prev => ({
+        ...prev,
+        [pageIndex]: currentSelections
+      }));
     }
-
-    const searchTerm = searchInputValue.toLowerCase();
-    const filteredResults = (usersData?.usersList || []).filter((item: any) => {
-      return (
-        (item.userName || '').toLowerCase().includes(searchTerm) ||
-        (item.emailId || '').toLowerCase().includes(searchTerm) || 
-        (item.name || '').toLowerCase().includes(searchTerm) || 
-        (item.companyName || '').toLowerCase().includes(searchTerm)
-      );
-    });
     
-    setTest(filteredResults);
-    setFilteredData(filteredResults);
-    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-    setIsdata(true);
+    // Change page
+    setPagination(prev => ({
+      ...prev,
+      pageIndex: newPage - 1,
+    }));
+    
+    // Clear current page selection state
+    setRowSelection({});
   };
 
   const optionsV8 = {
@@ -242,13 +270,90 @@ export const RMUsersTable = ({
 
   const controlOptions: ControlOptions = {
     controlled: true,
-    handleForwardClick: () =>
-      setPagination((prev) => ({ ...prev, pageIndex: prev.pageIndex + 1 })),
-    handleBackwardClick: () =>
-      setPagination((prev) => ({ ...prev, pageIndex: Math.max(prev.pageIndex - 1, 0) })),
+    handleForwardClick: () => {
+      // Save current page selections before going forward
+      if (Object.keys(rowSelection).length > 0) {
+        const currentSelections = Object.keys(rowSelection)
+          .map(rowId => {
+            const index = parseInt(rowId);
+            return currentPageData[index];
+          })
+          .filter(Boolean);
+        
+        setSelectedIndexMap(prev => ({
+          ...prev,
+          [pageIndex]: currentSelections
+        }));
+      }
+
+      setPagination((prev) => ({ 
+        ...prev, 
+        pageIndex: prev.pageIndex + 1 
+      }));
+      
+      // Clear row selection for the new page
+      setRowSelection({});
+    },
+    handleBackwardClick: () => {
+      // Save current page selections before going backward
+      if (Object.keys(rowSelection).length > 0) {
+        const currentSelections = Object.keys(rowSelection)
+          .map(rowId => {
+            const index = parseInt(rowId);
+            return currentPageData[index];
+          })
+          .filter(Boolean);
+        
+        setSelectedIndexMap(prev => ({
+          ...prev,
+          [pageIndex]: currentSelections
+        }));
+      }
+
+      setPagination((prev) => ({
+        ...prev,
+        pageIndex: Math.max(prev.pageIndex - 1, 0),
+      }));
+      
+      // Clear row selection for the new page
+      setRowSelection({});
+    },
   };
 
-  // Show loading spinner while data is being fetched
+  // Update the handleSearchButtonClick function to match the expected type
+  const handleSearchButtonClick = () => {
+    console.log("Search form submitted:", searchInputValue);
+    if (!searchInputValue) {
+      // If the search input is empty, reset the filtered data to show all records
+      setFilteredData(usersData?.usersList || []); // Reset to all records
+      setPagination((prev) => ({ ...prev, pageIndex: 0 })); // Reset to the first page
+      return;
+    }
+
+    const temp = tableData.filter((item: any) => {
+      return (
+        item.userName?.toLowerCase().includes(searchInputValue.toLowerCase()) || // Convert both to lowercase
+        item.emailId?.toLowerCase().includes(searchInputValue.toLowerCase()) || // Convert both to lowercase
+        item.name?.toLowerCase().includes(searchInputValue.toLowerCase()) || // Convert both to lowercase
+        item.companyName?.toLowerCase().includes(searchInputValue.toLowerCase()) // Convert both to lowercase
+      );
+    });
+    console.log(temp, "filterdata");
+    setTest(temp)
+
+    if (temp.length === 0) {
+      console.log("No matching records founddsadsdsd");
+    }
+    setFilteredData(temp);
+    setPagination((prev) => ({ ...prev, pageIndex: 0 })); // Reset to the first page
+    setIsdata(true)
+  };
+
+  // Optional: Add a useEffect to log changes to unEnroll
+  useEffect(() => {
+    console.log("Unenroll state updated:", unEnroll);
+  }, [unEnroll, rowSelection]);
+  // Render loading state conditionally
   if (isDataLoading) {
     return <Spinner />;
   }
@@ -293,7 +398,8 @@ export const RMUsersTable = ({
           Search
         </USBButton>
         <StyledParagraph>
-          VIEWING {isdata && filteredData.length === 0 ? 0 : currentPageData.length} of{' '}
+          VIEWING{" "}
+          {isdata && filteredData.length === 0 ? 0 : currentPageData.length} of{" "}
           {filteredData.length > 0 ? filteredData.length : 0} USERS
         </StyledParagraph>
       </RMsearch>
@@ -314,17 +420,7 @@ export const RMUsersTable = ({
             borders="none"
             isZebraStriped={true}
             batchActionsBar
-            toolBarActions={[
-              {
-                type: "utility",
-                text: "Export",
-                size: "small",
-                clickEvent: () => {
-                  console.log("Export button clicked");
-                },
-                id: "primary-button-test-id",
-              },
-            ]}
+            toolBarActions={[]}
           />
 
           <RMPagination>
@@ -336,12 +432,7 @@ export const RMUsersTable = ({
                   ? 1
                   : Math.ceil(filteredData.length / pageSize)
               }
-              handlePageChange={(newPage: number) => {
-                setPagination((prev) => ({
-                  ...prev,
-                  pageIndex: newPage - 1,
-                }));
-              }}
+              handlePageChange={handlePageChange}
               paginationAriaLabel={"Pagination Navigation"}
               backwardButtonAriaLabel="Previous page"
               forwardButtonAriaLabel="Next page"
@@ -358,7 +449,7 @@ export const RMUsersTable = ({
             usersData={unEnroll}
             actionType="unenroll"
             setRowSelection={setRowSelection}
-            onHideNotification={onHideNotification}
+            onResponseNotification={onResponseNotification}
             rowSelection={rowSelection}
             setShowNotification={setShowNotification}
           />
