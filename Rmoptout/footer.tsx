@@ -49,6 +49,10 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
     useUpdateenrollUsersMutation();
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
+  const [popupUsersData, setPopupUsersData] = useState<any>({
+    ...usersData,
+    usersList: []
+  });
 
   const selectedRowsCount = Object.keys(rowSelection).length;
 
@@ -143,6 +147,25 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
 
     setShowNotification(false);
     
+    // Explicitly prepare the data for the popup right at the moment of opening
+    const usersToUnenroll = selectedUsers.length > 0 ? selectedUsers : 
+      Object.keys(rowSelection)
+        .map((rowId) => {
+          const index = parseInt(rowId);
+          return usersData.usersList[index];
+        })
+        .filter(Boolean);
+    
+    console.log("Users to unenroll:", usersToUnenroll);
+    
+    // Create a fresh copy of the data for the popup
+    setPopupUsersData({
+      campaignId: usersData.campaignId,
+      unEnrollReason: "",
+      additionalComments: "",
+      usersList: usersToUnenroll
+    });
+    
     // Open the modal
     setModalIsOpen(true);
   };
@@ -185,10 +208,7 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
         modalIsOpen={modalIsOpen}
         setShowNotification={setShowNotification}
         setModalIsOpen={setModalIsOpen}
-        usersData={{
-          ...usersData,
-          usersList: selectedUsers, // Use our maintained selectedUsers list
-        }}
+        usersData={popupUsersData}
         setRowSelection={setRowSelection}
         onResponseNotification={onResponseNotification}
       />

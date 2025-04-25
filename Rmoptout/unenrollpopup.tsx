@@ -35,7 +35,7 @@ export interface RMUnEnrolledUsersPopup {
     }[];
   };
   setRowSelection?: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
-  onHideNotification: (bool: boolean) => void;
+  onResponseNotification: (bool: boolean) => void;
   setShowNotification: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
@@ -44,7 +44,7 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
   setModalIsOpen,
   usersData,
   setRowSelection,
-  onHideNotification,
+  onResponseNotification,
   setShowNotification,
 }) => {
   const [selectedReason, setSelectedReason] = useState<string | null>(null);
@@ -52,6 +52,21 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [updateUnenrollUsers, { isLoading }] = useUpdateUnenrollUsersMutation();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [internalUsersData, setInternalUsersData] = useState<any>({
+    ...usersData,
+    usersList: usersData.usersList || []
+  });
+
+  // Update internal state when usersData changes
+  useEffect(() => {
+    if (usersData && usersData.usersList) {
+      setInternalUsersData({
+        ...usersData,
+        usersList: usersData.usersList
+      });
+      console.log("Popup received users data:", usersData.usersList);
+    }
+  }, [usersData]);
 
   // Reset form when modal is opened
   useEffect(() => {
@@ -60,11 +75,22 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
       setAdditionalComments("");
       setErrorMessage(null);
       setIsSubmitting(false);
+      
+      // Update the internal data whenever modal opens
+      setInternalUsersData({
+        ...usersData,
+        usersList: usersData.usersList || []
+      });
+      
+      console.log("Modal opened with users:", usersData.usersList);
     }
-  }, [modalIsOpen]);
+  }, [modalIsOpen, usersData]);
 
   const handleReasonChange = (value: any) => {
-    setSelectedReason(value.inputValue);
+    setSelectedReason(value.inputValue); // Update the selected reason
+    if (value.inputValue === "other") {
+      setErrorMessage(null); // Clear the error message when "other" is selected
+    }
     setErrorMessage(null);
   };
 
@@ -76,7 +102,7 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
   };
 
   // Calculate the length of the usersList
-  const usersListLength = usersData.usersList ? usersData.usersList.length : 0;
+  const usersListLength = internalUsersData.usersList ? internalUsersData.usersList.length : 0;
 
   const handleProceedClick = async () => {
     // Prevent multiple submissions
@@ -98,36 +124,41 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
 
     // Clear error message if validation passes
     setErrorMessage(null);
+    console.log("Current users data:", internalUsersData);
     
-    if (!usersData.usersList || usersData.usersList.length === 0) {
+    if (!internalUsersData.usersList || internalUsersData.usersList.length === 0) {
       console.error("No users selected for unenrollment");
       setIsSubmitting(false);
       return;
     }
 
     const updatedUsersData = {
-      campaignId: usersData.campaignId,
+      campaignId: internalUsersData.campaignId,
       unEnrollReason: selectedReason || "",
       additionalComments: additionalComments,
-      usersList: usersData.usersList
+      usersList: [...internalUsersData.usersList] // Create a new array to avoid reference issues
     };
 
     try {
       console.log("Sending unenroll data:", JSON.stringify(updatedUsersData));
+      console.log("loading----- before:", isLoading);
+
       const response = await updateUnenrollUsers(updatedUsersData).unwrap();
       console.log("Unenroll response:", response);
-      
+      console.log("loading----- After:", isLoading);
+    
       // Reset selection after successful unenrollment
       if (setRowSelection) {
         setRowSelection({});
       }
-      
-      onHideNotification(true);
+      localStorage.setItem("unEnrollCount", usersListLength.toString()); // Store the data in local storage
+      onResponseNotification(true); // Pass the user count
+  
       setModalIsOpen(false);
       setShowNotification(false);
     } catch (error) {
       console.error("Error unenrolling users:", error);
-      onHideNotification(false);
+      onResponseNotification(false);
     } finally {
       setIsSubmitting(false);
     }
@@ -154,6 +185,9 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
     },
     { value: "other", content: "other" },
   ];
+
+  // If we have no users, don't render the modal
+  if (!modalIsOpen) return null;
 
   return (
     <>
@@ -187,7 +221,7 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
                 }),
               }}
             />
-            {errorMessage && (
+            {errorMessage && !selectedReason && (
               <p style={{ color: "rgb(207, 42, 54)", fontSize: '13px', marginTop: "5px" }}>
                 <USBIconWarningSign colorVariant="error" 
                   style={{ width: '13px', height: '13px', marginLeft: '2px' }} />
@@ -195,6 +229,7 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
               </p>
             )}
           </UnEnrollPopupSelect>
+          
           <UnEnrollPopupTextarea>
             <USBTextArea
               inputName="business-purpose"
@@ -202,18 +237,18 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
               maxlength={50}
               statusUpdateCallback={handleCommentsChange}
             >
-              {/* Conditionally render the helper text */}
-              {!(selectedReason === "other") && (
+            {!(selectedReason === "other") && (
                 <USBFormsHelperText labelFor="text-area">
                   Optional
                 </USBFormsHelperText>
-              )}
-              {/* Display the error message only for the text input when 'other' is selected */}
-              {selectedReason === "other" && !additionalComments.trim() && (
+            )}
+            {errorMessage && selectedReason === "other" && !additionalComments.trim() && (
                 <p style={{ color: "rgb(207, 42, 54)", fontSize: '13px', marginTop: "5px" }}>
-                  <USBIconWarningSign colorVariant="error" 
-                  style={{ width: '13px', height: '13px', marginLeft: '2px' }} />
-                  <span style={{marginLeft:'5px'}}>Please provide additional comments.</span>
+                  <USBIconWarningSign
+                    colorVariant="error"
+                    style={{ width: '13px', height: '13px', marginLeft: '2px' }}
+                  />
+                  <span style={{ marginLeft: '5px' }}>{errorMessage}</span>
                 </p>
               )}
             </USBTextArea>
