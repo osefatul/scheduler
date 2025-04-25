@@ -9,6 +9,8 @@ import USBButton from "@usb-shield/react-button";
 import RMUnEnroll from "../RMPopup.tsx/RMUnEnrollPopup";
 import { useUpdateenrollUsersMutation } from "@/internal/services/rmcampaignUsersAPI";
 import { Spinner } from "../../spinner";
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
+import { clearSelectedUsers } from "../../store/userSelectionSlice";
 
 interface RMtabfooterProps {
   usersData: {
@@ -33,6 +35,7 @@ interface RMtabfooterProps {
     action?: string,
     count?: number
   ) => void;
+  onUndoSelections?: () => void; // Optional callback for undo selections
 }
 
 const RMtabfooter: React.FC<RMtabfooterProps> = ({
@@ -42,17 +45,18 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
   actionType,
   setRowSelection,
   onResponseNotification,
+  onUndoSelections,
 }) => {
   const [isAboveFooter, setIsAboveFooter] = useState(false);
   const [modalIsOpen, setModalIsOpen] = useState(false);
-  const [updateEnrollUsers, { isLoading: isEnrollLoading }] =
-    useUpdateenrollUsersMutation();
+  const [updateEnrollUsers, { isLoading: isEnrollLoading }] = useUpdateenrollUsersMutation();
   const [isProcessing, setIsProcessing] = useState(false);
   
-  // State to track selected users for both enroll and unenroll operations
-  const [selectedUsersForModal, setSelectedUsersForModal] = useState<any[]>([]);
+  // Redux
+  const dispatch = useAppDispatch();
+  const selectedUsers = useAppSelector(state => state.userSelection.selectedUsers);
   
-  const selectedRowsCount = Object.keys(rowSelection).length;
+  const selectedRowsCount = selectedUsers.length;
 
   useEffect(() => {
     const handleScroll = () => {
@@ -73,13 +77,6 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
     };
   }, []);
 
-  // This function will be called by the table component to update our selected users
-  // We're adding this explicitly to capture the selected users when the selection changes
-  const updateSelectedUsers = (selectedUsersList: any[]) => {
-    setSelectedUsersForModal(selectedUsersList);
-    console.log("Selected users updated in RMtabfooter:", selectedUsersList);
-  };
-
   const handleEnrollUsers = async () => {
     if (selectedRowsCount === 0) {
       setShowNotification(true);
@@ -90,16 +87,10 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
     setIsProcessing(true);
     setShowNotification(false);
 
-    if (selectedUsersForModal.length === 0) {
-      console.error("No users selected for enrollment");
-      setIsProcessing(false);
-      return;
-    }
-
     try {
       const enrollData = {
         campaignId: usersData.campaignId,
-        usersList: [...selectedUsersForModal], // Use the captured selected users
+        usersList: [...selectedUsers], // Use users from Redux
       };
 
       console.log("Sending enrollment data:", JSON.stringify(enrollData));
@@ -114,7 +105,7 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
 
       // Reset selection after successful enrollment
       setRowSelection({});
-      setSelectedUsersForModal([]);
+      dispatch(clearSelectedUsers());
       onResponseNotification(true, "enroll", enrollData.usersList.length);
     } catch (error) {
       console.error("Error enrolling users:", error);
@@ -132,17 +123,19 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
 
     setShowNotification(false);
     
-    // We're opening the modal with the already captured list of selected users
-    console.log("Opening modal with selected users:", selectedUsersForModal);
-    console.log("Number of users for unenrollment:", selectedUsersForModal.length);
-    
-    // Open the modal
+    // Just open the modal - the modal will get users from Redux
+    console.log("Opening modal with selected users count:", selectedRowsCount);
     setModalIsOpen(true);
   };
 
   const handleUndoSelections = () => {
-    setRowSelection({});
-    setSelectedUsersForModal([]);
+    if (onUndoSelections) {
+      onUndoSelections(); // Use the callback if provided
+    } else {
+      // Default behavior
+      setRowSelection({});
+      dispatch(clearSelectedUsers());
+    }
     setShowNotification(false);
   };
 
@@ -180,7 +173,7 @@ const RMtabfooter: React.FC<RMtabfooterProps> = ({
         setModalIsOpen={setModalIsOpen}
         usersData={{
           campaignId: usersData.campaignId,
-          usersList: selectedUsersForModal // Pass the captured selected users
+          usersList: selectedUsers // Use users from Redux
         }}
         setRowSelection={setRowSelection}
         onResponseNotification={onResponseNotification}

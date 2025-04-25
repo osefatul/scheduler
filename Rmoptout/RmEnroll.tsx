@@ -18,6 +18,12 @@ import { RMStyledTableWrapper } from "./RMEnrollUserstable.styles";
 import { USBIconSort, USBIconInfo } from "@usb-shield/react-icons";
 import { Spinner } from "../../spinner";
 import { StyledParagraphCenter } from "../../ManageCampaign/ManageCampaign.styled";
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
+import { 
+  updateSelectionFromPage, 
+  clearSelectedUsers, 
+  setCampaignId 
+} from "../../store/userSelectionSlice";
 
 interface ControlOptions {
   controlled: boolean;
@@ -34,6 +40,15 @@ export const RMUsersTable = ({
   onResponseNotification: (bool: boolean) => void;
   setShowNotification: React.Dispatch<React.SetStateAction<boolean>>;
 }) => {
+  // Redux
+  const dispatch = useAppDispatch();
+  const selectedUsers = useAppSelector(state => state.userSelection.selectedUsers);
+  
+  // Set campaign ID in Redux when component mounts or campaignId changes
+  useEffect(() => {
+    dispatch(setCampaignId(campaignId));
+  }, [dispatch, campaignId]);
+  
   // Only call the query if campaignId is not empty
   const { data: usersData, isLoading: isDataLoading } =
     useGetCampaignEnrollUsersByIdQuery(campaignId, {
@@ -55,9 +70,6 @@ export const RMUsersTable = ({
     pageIndex: 0,
     pageSize: 10,
   });
-
-  // Track the full list of selected users across pages
-  const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
 
   const [unEnroll, setUnEnroll] = useState<{
     campaignId: string;
@@ -83,6 +95,16 @@ export const RMUsersTable = ({
       campaignId: campaignId,
     }));
   }, [campaignId]);
+  
+  // Update unEnroll state when selectedUsers changes in Redux
+  useEffect(() => {
+    setUnEnroll((prev) => ({
+      ...prev,
+      usersList: selectedUsers,
+    }));
+    
+    console.log("Selected users from Redux:", selectedUsers);
+  }, [selectedUsers]);
 
   const handleSort = (key: string) => {
     setSortConfig((prev) => {
@@ -167,77 +189,27 @@ export const RMUsersTable = ({
     setData(currentPageData);
   }, [currentPageData]);
 
-  // Handle checkbox selection and update usersList
+  // Handle checkbox selection using Redux
   const handleRowSelectionChange = (newSelection: any) => {
     // Check if newSelection is a function and call it with the current state
     const updatedSelection =
       typeof newSelection === "function" ? newSelection(rowSelection) : newSelection;
   
-    console.log("Row selection changed:", updatedSelection); // Debugging log
-    console.log("Type of updatedSelection:", typeof updatedSelection); // Check the type
-    console.log("Keys in updatedSelection:", Object.keys(updatedSelection || {})); // Check the keys
-  
-    // Update the rowSelection state
+    // Update the local rowSelection state for visual UI
     setRowSelection(updatedSelection);
-    
+  
     // If any checkbox is selected, hide the error message
     if (Object.keys(updatedSelection).length > 0) {
       setShowNotification(false);
     }
     
-    // CRITICAL FIX: Map selections to actual users using the current page data
-    const newSelectedUsers = Object.keys(updatedSelection)
-      .filter(key => updatedSelection[key]) // Only include selected rows
-      .map(rowId => {
-        const index = parseInt(rowId);
-        // Use currentPageData to get the actual user object
-        if (index >= 0 && index < currentPageData.length) {
-          return currentPageData[index];
-        }
-        return null;
-      })
-      .filter(Boolean);
-    
-    console.log("New selected users from current page:", newSelectedUsers);
-    
-    // Update the complete list of selected users
-    const updatedUsers = [...selectedUsers];
-    
-    // Add newly selected users
-    newSelectedUsers.forEach(user => {
-      if (!updatedUsers.some(u => u.userName === user.userName)) {
-        updatedUsers.push(user);
-      }
-    });
-    
-    // Remove deselected users from the current page
-    const currentPageUsernames = currentPageData.map(user => user.userName);
-    const selectedUsernames = Object.keys(updatedSelection)
-      .filter(key => updatedSelection[key])
-      .map(rowId => {
-        const index = parseInt(rowId);
-        return index >= 0 && index < currentPageData.length ? currentPageData[index].userName : null;
-      })
-      .filter(Boolean);
-    
-    const finalUsers = updatedUsers.filter(user => {
-      // Keep users not on current page
-      if (!currentPageUsernames.includes(user.userName)) {
-        return true;
-      }
-      // For users on current page, only keep if still selected
-      return selectedUsernames.includes(user.userName);
-    });
-    
-    setSelectedUsers(finalUsers);
-    
-    // Update the unEnroll state with the selected users
-    setUnEnroll(prev => ({
-      ...prev,
-      usersList: finalUsers
+    // Dispatch to Redux with current page data and selection
+    dispatch(updateSelectionFromPage({
+      currentPageData,
+      rowSelection: updatedSelection
     }));
     
-    console.log("Updated full selected users list:", finalUsers);
+    console.log("Updated row selection in Redux", updatedSelection);
   };
 
   // Handle page change
@@ -248,8 +220,7 @@ export const RMUsersTable = ({
       pageIndex: newPage - 1,
     }));
     
-    // Reset the current page's row selection state (visual checkboxes)
-    // but maintain the overall selected users list
+    // Reset the current page's row selection state (visual checkboxes only)
     setRowSelection({});
   };
 
@@ -273,7 +244,6 @@ export const RMUsersTable = ({
   const controlOptions: ControlOptions = {
     controlled: true,
     handleForwardClick: () => {
-      // Move to next page
       setPagination((prev) => ({ 
         ...prev, 
         pageIndex: prev.pageIndex + 1 
@@ -283,7 +253,6 @@ export const RMUsersTable = ({
       setRowSelection({});
     },
     handleBackwardClick: () => {
-      // Move to previous page
       setPagination((prev) => ({
         ...prev,
         pageIndex: Math.max(prev.pageIndex - 1, 0),
@@ -326,11 +295,12 @@ export const RMUsersTable = ({
     setRowSelection({});
   };
 
-  // Optional: Add a useEffect to log changes to unEnroll
-  useEffect(() => {
-    console.log("Unenroll state updated:", unEnroll);
-  }, [unEnroll, rowSelection]);
-  
+  // Handle clearing all selections
+  const handleUndoSelections = () => {
+    dispatch(clearSelectedUsers());
+    setRowSelection({});
+  };
+
   // Render loading state conditionally
   if (isDataLoading) {
     return <Spinner />;
@@ -426,13 +396,14 @@ export const RMUsersTable = ({
           <RMtabfooter
             usersData={{
               ...unEnroll,
-              usersList: selectedUsers // Pass the complete list of selected users
+              usersList: selectedUsers // Use selectedUsers from Redux
             }}
             actionType="unenroll"
             setRowSelection={setRowSelection}
             onResponseNotification={onResponseNotification}
             rowSelection={rowSelection}
             setShowNotification={setShowNotification}
+            onUndoSelections={handleUndoSelections} // Pass the handler
           />
         </>
       ) : (

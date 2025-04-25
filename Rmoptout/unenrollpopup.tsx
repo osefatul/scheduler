@@ -17,6 +17,8 @@ import { USBFormsHelperText } from "@usb-shield/react-forms-base";
 import { useUpdateUnenrollUsersMutation } from "@/internal/services/rmcampaignUsersAPI";
 import { Spinner } from "../../spinner";
 import { USBIconWarningSign } from '@usb-shield/react-icons';
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
+import { clearSelectedUsers } from "../../store/userSelectionSlice";
 
 export interface RMUnEnrolledUsersPopup {
   modalIsOpen: boolean;
@@ -53,17 +55,10 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
   const [updateUnenrollUsers, { isLoading }] = useUpdateUnenrollUsersMutation();
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  // Keep our own copy of the usersData
-  const [localUsersData, setLocalUsersData] = useState(usersData);
-
-  // Capture the users data when the modal opens or when usersData changes
-  useEffect(() => {
-    if (usersData && Array.isArray(usersData.usersList)) {
-      console.log(`Received ${usersData.usersList.length} users in RMUnEnrollPopup`);
-      setLocalUsersData(usersData);
-    }
-  }, [usersData, modalIsOpen]);
-
+  // Redux
+  const dispatch = useAppDispatch();
+  const selectedUsers = useAppSelector(state => state.userSelection.selectedUsers);
+  
   // Reset form when modal is opened
   useEffect(() => {
     if (modalIsOpen) {
@@ -71,9 +66,9 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
       setAdditionalComments("");
       setErrorMessage(null);
       setIsSubmitting(false);
-      console.log(`Modal opened with ${usersData.usersList?.length || 0} users`);
+      console.log("Modal opened with users from Redux:", selectedUsers);
     }
-  }, [modalIsOpen, usersData]);
+  }, [modalIsOpen, selectedUsers]);
 
   const handleReasonChange = (value: any) => {
     setSelectedReason(value.inputValue);
@@ -91,7 +86,7 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
   };
 
   // Calculate the length of the usersList
-  const usersListLength = localUsersData.usersList?.length || 0;
+  const usersListLength = selectedUsers.length;
 
   const handleProceedClick = async () => {
     // Prevent multiple submissions
@@ -113,9 +108,8 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
 
     // Clear error message if validation passes
     setErrorMessage(null);
-    console.log("Users to unenroll:", localUsersData.usersList);
     
-    if (!localUsersData.usersList || localUsersData.usersList.length === 0) {
+    if (selectedUsers.length === 0) {
       console.error("No users selected for unenrollment");
       setIsSubmitting(false);
       return;
@@ -123,10 +117,10 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
 
     // Create the payload for the API
     const updatedUsersData = {
-      campaignId: localUsersData.campaignId,
+      campaignId: usersData.campaignId,
       unEnrollReason: selectedReason || "",
       additionalComments: additionalComments,
-      usersList: [...localUsersData.usersList]
+      usersList: [...selectedUsers] // Use users from Redux
     };
 
     try {
@@ -138,6 +132,9 @@ const RMUnEnroll: React.FC<RMUnEnrolledUsersPopup> = ({
       if (setRowSelection) {
         setRowSelection({});
       }
+      
+      // Clear Redux selections
+      dispatch(clearSelectedUsers());
       
       localStorage.setItem("unEnrollCount", usersListLength.toString());
       onResponseNotification(true);

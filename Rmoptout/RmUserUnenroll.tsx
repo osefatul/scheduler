@@ -18,6 +18,12 @@ import { USBIconInfo, USBIconSort } from "@usb-shield/react-icons";
 import { StyledParagraphCenter } from "../../ManageCampaign/ManageCampaign.styled";
 import USBButton from "@usb-shield/react-button";
 import { Spinner } from "../../spinner";
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
+import { 
+  updateSelectionFromPage, 
+  clearSelectedUsers, 
+  setCampaignId 
+} from "../../store/userSelectionSlice";
 
 interface ControlOptions {
   controlled: boolean;
@@ -34,6 +40,15 @@ export const RMUsersUnEnrollTable = ({
   onResponseNotification: (bool: boolean,action?:string,count?:number) => void;
   setShowNotification: React.Dispatch<React.SetStateAction<boolean>>;
 }) => {
+  // Redux
+  const dispatch = useAppDispatch();
+  const selectedUsers = useAppSelector(state => state.userSelection.selectedUsers);
+  
+  // Set campaign ID in Redux when component mounts or campaignId changes
+  useEffect(() => {
+    dispatch(setCampaignId(campaignId));
+  }, [dispatch, campaignId]);
+  
   // Only call the query if campaignId is not empty
   const { data: usersData, isLoading: isDataLoading } = useGetCampaignUnEnrollUsersByIdQuery(campaignId, {
     skip: !campaignId,
@@ -54,9 +69,6 @@ export const RMUsersUnEnrollTable = ({
     pageIndex: 0,
     pageSize: 10,
   });
-  
-  // Track selected users across all pages
-  const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
 
   const [enroll, setEnroll] = useState<{
     campaignId: string;
@@ -80,6 +92,16 @@ export const RMUsersUnEnrollTable = ({
       campaignId: campaignId
     }));
   }, [campaignId]);
+  
+  // Update enroll state with selected users from Redux
+  useEffect(() => {
+    setEnroll(prev => ({
+      ...prev,
+      usersList: selectedUsers
+    }));
+    
+    console.log("Updated enroll state with Redux selected users:", selectedUsers);
+  }, [selectedUsers]);
 
   const handleSort = (key: string) => {
     setSortConfig((prev) => {
@@ -171,17 +193,13 @@ export const RMUsersUnEnrollTable = ({
     setData(currentPageData);
   }, [currentPageData]);
 
-  // Handle checkbox selection
+  // Handle checkbox selection using Redux
   const handleRowSelectionChange = (newSelection: any) => {
     // Check if newSelection is a function and call it with the current state
     const updatedSelection =
       typeof newSelection === "function" ? newSelection(rowSelection) : newSelection;
   
-    console.log("Row selection changed:", updatedSelection); 
-    console.log("Type of updatedSelection:", typeof updatedSelection);
-    console.log("Keys in updatedSelection:", Object.keys(updatedSelection || {}));
-  
-    // Update the rowSelection state
+    // Update the local rowSelection state for visual UI
     setRowSelection(updatedSelection);
   
     // If any checkbox is selected, hide the error message
@@ -189,59 +207,13 @@ export const RMUsersUnEnrollTable = ({
       setShowNotification(false);
     }
     
-    // CRITICAL FIX: Map selections to actual users using the current page data
-    const newSelectedUsers = Object.keys(updatedSelection)
-      .filter(key => updatedSelection[key]) // Only include selected rows
-      .map(rowId => {
-        const index = parseInt(rowId);
-        // Use currentPageData to get the actual user object
-        if (index >= 0 && index < currentPageData.length) {
-          return currentPageData[index];
-        }
-        return null;
-      })
-      .filter(Boolean);
-    
-    console.log("New selected users from current page:", newSelectedUsers);
-    
-    // Update the complete list of selected users
-    const updatedUsers = [...selectedUsers];
-    
-    // Add newly selected users
-    newSelectedUsers.forEach(user => {
-      if (!updatedUsers.some(u => u.userName === user.userName)) {
-        updatedUsers.push(user);
-      }
-    });
-    
-    // Remove deselected users from the current page
-    const currentPageUsernames = currentPageData.map(user => user.userName);
-    const selectedUsernames = Object.keys(updatedSelection)
-      .filter(key => updatedSelection[key])
-      .map(rowId => {
-        const index = parseInt(rowId);
-        return index >= 0 && index < currentPageData.length ? currentPageData[index].userName : null;
-      })
-      .filter(Boolean);
-    
-    const finalUsers = updatedUsers.filter(user => {
-      // Keep users not on current page
-      if (!currentPageUsernames.includes(user.userName)) {
-        return true;
-      }
-      // For users on current page, only keep if still selected
-      return selectedUsernames.includes(user.userName);
-    });
-    
-    setSelectedUsers(finalUsers);
-    
-    // Update the enroll state with the selected users
-    setEnroll(prev => ({
-      ...prev,
-      usersList: finalUsers
+    // Dispatch to Redux with current page data and selection
+    dispatch(updateSelectionFromPage({
+      currentPageData,
+      rowSelection: updatedSelection
     }));
     
-    console.log("Updated full selected users list:", finalUsers);
+    console.log("Updated row selection in Redux", updatedSelection);
   };
 
   // Handle page change
@@ -252,8 +224,7 @@ export const RMUsersUnEnrollTable = ({
       pageIndex: newPage - 1,
     }));
     
-    // Reset the current page's row selection state (visual checkboxes)
-    // but maintain the overall selected users list
+    // Reset the current page's row selection state (visual checkboxes only)
     setRowSelection({});
   };
 
@@ -277,7 +248,6 @@ export const RMUsersUnEnrollTable = ({
   const controlOptions: ControlOptions = {
     controlled: true,
     handleForwardClick: () => {
-      // Save current page selections before going forward
       // Move to next page
       setPagination((prev) => ({
         ...prev,
@@ -288,7 +258,6 @@ export const RMUsersUnEnrollTable = ({
       setRowSelection({});
     },
     handleBackwardClick: () => {
-      // Save current page selections before going backward
       // Move to previous page
       setPagination((prev) => ({
         ...prev,
@@ -302,33 +271,40 @@ export const RMUsersUnEnrollTable = ({
 
   // Update the handleSearchButtonClick function to match the expected type
   const handleSearchButtonClick = () => {
-    console.log("Search form submitted:", searchInputValue);
     if (!searchInputValue) {
       // If the search input is empty, reset the filtered data to show all records
-      setFilteredData(usersData?.usersList || []); // Reset to all records
-      setPagination((prev) => ({ ...prev, pageIndex: 0 })); // Reset to the first page
+      setFilteredData(usersData?.usersList || []);
+      setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+      setIsdata(false);
       return;
     }
 
     const temp = tableData.filter((item: any) => {
       return (
-        item.userName?.toLowerCase().includes(searchInputValue.toLowerCase()) || // Convert both to lowercase
-        item.emailId?.toLowerCase().includes(searchInputValue.toLowerCase()) || // Convert both to lowercase
-        item.name?.toLowerCase().includes(searchInputValue.toLowerCase()) || // Convert both to lowercase
-        item.companyName?.toLowerCase().includes(searchInputValue.toLowerCase()) // Convert both to lowercase
+        item.userName?.toLowerCase().includes(searchInputValue.toLowerCase()) ||
+        item.emailId?.toLowerCase().includes(searchInputValue.toLowerCase()) ||
+        item.name?.toLowerCase().includes(searchInputValue.toLowerCase()) ||
+        item.companyName?.toLowerCase().includes(searchInputValue.toLowerCase())
       );
     });
-    console.log(temp, "filterdata");
+    
     setTest(temp);
 
     if (temp.length === 0) {
       console.log("No matching records found");
     }
+    
     setFilteredData(temp);
-    setPagination((prev) => ({ ...prev, pageIndex: 0 })); // Reset to the first page
+    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
     setIsdata(true);
     
-    // Maintain selections after search
+    // Reset visual selection state
+    setRowSelection({});
+  };
+
+  // Handle clearing all selections
+  const handleUndoSelections = () => {
+    dispatch(clearSelectedUsers());
     setRowSelection({});
   };
 
@@ -425,8 +401,8 @@ export const RMUsersUnEnrollTable = ({
 
           <RMtabfooter
             usersData={{
-              campaignId: enroll.campaignId,
-              usersList: selectedUsers // Pass the complete list of selected users
+              campaignId: campaignId,
+              usersList: selectedUsers // Use selectedUsers from Redux
             }}
             actionType="enroll"
             setRowSelection={setRowSelection}
@@ -435,6 +411,7 @@ export const RMUsersUnEnrollTable = ({
             }
             rowSelection={rowSelection}
             setShowNotification={setShowNotification}
+            onUndoSelections={handleUndoSelections} // Pass the handler
           />
         </>
       ) : (
