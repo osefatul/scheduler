@@ -16,6 +16,9 @@ public interface UserCampaignTrackerRepository extends JpaRepository<UserCampaig
     
     Optional<UserCampaignTracker> findByUserIdAndCompanyIdAndCampaignIdAndWeekStartDate(
         String userId, String companyId, String campaignId, Date weekStartDate);
+
+    List<UserCampaignTracker> findByUserIdAndCompanyIdAndCampaignId(
+    String userId, String companyId, String campaignId);
     
     List<UserCampaignTracker> findByUserIdAndCompanyIdAndWeekStartDate(
         String userId, String companyId, Date weekStartDate);
