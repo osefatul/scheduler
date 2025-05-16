@@ -1,3 +1,28 @@
+package com.usbank.corp.dcr.api.service;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.text.SimpleDateFormat;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.usbank.corp.dcr.api.entity.CampaignMapping;
+import com.usbank.corp.dcr.api.entity.UserCampaignTracker;
+import com.usbank.corp.dcr.api.exception.DataHandlingException;
+import com.usbank.corp.dcr.api.model.CampaignResponseDTO;
+import com.usbank.corp.dcr.api.model.EnrolledUsersDTO;
+import com.usbank.corp.dcr.api.model.UserDTO;
+import com.usbank.corp.dcr.api.repository.CampaignRepository;
+import com.usbank.corp.dcr.api.repository.UserCampaignTrackerRepository;
+import com.usbank.corp.dcr.api.util.RotationUtils;
+
+import lombok.extern.slf4j.Slf4j;
+
 @Service
 @Slf4j
 public class UserCampaignRotationService {
@@ -164,12 +189,21 @@ public class UserCampaignRotationService {
             }
             
             // Cache miss or expired, check with service
-            List<UserCompanyDTO> enrolledUsers = rmManageCampaignService.getEnrolledUsers(campaignId);
+            EnrolledUsersDTO enrolledUsersDTO = rmManageCampaignService.getEnrolledUsers(campaignId);
             
             // Check if the user-company pair exists in the enrolled users
-            boolean userCompanyFound = enrolledUsers.stream()
-                    .anyMatch(user -> user.getUserName().equals(userId) && 
-                                    user.getCompanyName().equals(companyId));
+            // We need to check the usersList field in EnrolledUsersDTO
+            boolean userCompanyFound = false;
+            
+            if (enrolledUsersDTO != null && enrolledUsersDTO.getUsersList() != null) {
+                // Use the usersList field to find matching user-company pair
+                for (UserDTO user : enrolledUsersDTO.getUsersList()) {
+                    if (user.getUserName().equals(userId) && user.getCompanyName().equals(companyId)) {
+                        userCompanyFound = true;
+                        break;
+                    }
+                }
+            }
             
             // Update cache if validation passed
             if (userCompanyFound) {
@@ -206,22 +240,26 @@ public class UserCampaignRotationService {
             for (CampaignMapping campaign : activeCampaigns) {
                 try {
                     String campaignId = campaign.getId();
-                    List<UserCompanyDTO> enrolledUsers = rmManageCampaignService.getEnrolledUsers(campaignId);
+                    EnrolledUsersDTO enrolledUsersDTO = rmManageCampaignService.getEnrolledUsers(campaignId);
                     
                     // Create a new cache map for this campaign
                     Map<String, Long> newCampaignCache = new ConcurrentHashMap<>();
                     
                     // Populate with all valid user-company pairs
-                    for (UserCompanyDTO user : enrolledUsers) {
-                        String userCompanyKey = user.getUserName() + ":" + user.getCompanyName();
-                        newCampaignCache.put(userCompanyKey, currentTime);
+                    if (enrolledUsersDTO != null && enrolledUsersDTO.getUsersList() != null) {
+                        for (UserDTO user : enrolledUsersDTO.getUsersList()) {
+                            String userCompanyKey = user.getUserName() + ":" + user.getCompanyName();
+                            newCampaignCache.put(userCompanyKey, currentTime);
+                        }
                     }
                     
                     // Replace existing cache for this campaign
                     validationCache.put(campaignId, newCampaignCache);
                     
                     log.info("Refreshed cache for campaign {} with {} enrolled users", 
-                            campaignId, enrolledUsers.size());
+                            campaignId, 
+                            enrolledUsersDTO != null && enrolledUsersDTO.getUsersList() != null ? 
+                                enrolledUsersDTO.getUsersList().size() : 0);
                 } catch (Exception e) {
                     log.error("Error refreshing cache for campaign {}: {}", 
                             campaign.getId(), e.getMessage(), e);
@@ -261,8 +299,6 @@ public class UserCampaignRotationService {
             }
         }
     }
-    
-    // Rest of your service code remains the same
     
     /**
      * Get all eligible campaigns for a company
