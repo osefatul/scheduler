@@ -1,4 +1,4 @@
-package com.usbank.corp.dcr.api.controller;
+package controller;
 
 import java.util.List;
 

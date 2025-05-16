@@ -17,7 +17,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(name = "campaigns_dev_rotation1")
+@Table(name = "campaigns")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

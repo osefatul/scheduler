@@ -439,3 +439,32 @@ SELECT NEWID(), id, 'ABCCorp' FROM campaigns_dev_rotation1 WHERE name = 'First C
 UNION
 SELECT NEWID(), id, 'XYZInc' FROM campaigns_dev_rotation1 WHERE name = 'First Campaign';
 ```
+
+
+
+### user_campaign_tracker table - all existing tables remain unchanged
+
+```sql
+CREATE TABLE user_campaign_tracker (
+    id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    company_id VARCHAR(255) NOT NULL,
+    campaign_id VARCHAR(255) NOT NULL,
+    remaining_weekly_frequency INT NOT NULL,
+    remaining_display_cap INT NOT NULL,
+    last_view_date TIMESTAMP,
+    week_start_date TIMESTAMP NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT fk_user_campaign_company FOREIGN KEY (company_id) 
+        REFERENCES company(id), -- Assumes your company table has this structure
+    CONSTRAINT fk_user_campaign_campaign FOREIGN KEY (campaign_id) 
+        REFERENCES campaign_mapping(id) -- Assumes your campaign table structure
+);
+
+-- Add indices for performance
+CREATE INDEX idx_user_campaign_user_id ON user_campaign_tracker(user_id);
+CREATE INDEX idx_user_campaign_company_id ON user_campaign_tracker(company_id);
+CREATE INDEX idx_user_campaign_campaign_id ON user_campaign_tracker(campaign_id);
+CREATE INDEX idx_user_campaign_week_date ON user_campaign_tracker(week_start_date);
+CREATE INDEX idx_user_campaign_user_company_week ON user_campaign_tracker(user_id, company_id, week_start_date);
+```
