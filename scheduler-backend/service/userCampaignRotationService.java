@@ -1,5 +1,7 @@
 @Service
 @Slf4j
+@Service
+@Slf4j
 public class UserCampaignRotationService {
 
     @Autowired
@@ -14,14 +16,38 @@ public class UserCampaignRotationService {
     @Autowired
     private CampaignService campaignService;
     
+    @Autowired
+    private RmManageCampaignService rmManageCampaignService;
+    
+    // Two-level cache: campaignId -> (userId:companyId -> Boolean)
+    private LoadingCache<String, LoadingCache<String, Boolean>> userCompanyValidationCache;
+    
+    @PostConstruct
+    public void init() {
+        // Initialize the two-level cache
+        userCompanyValidationCache = CacheBuilder.newBuilder()
+                .expireAfterWrite(30, TimeUnit.MINUTES)  // Campaign-level cache expiry
+                .maximumSize(100)  // Assuming you have a reasonable number of campaigns
+                .build(new CacheLoader<String, LoadingCache<String, Boolean>>() {
+                    @Override
+                    public LoadingCache<String, Boolean> load(String campaignId) {
+                        // Create a new cache for each campaign
+                        return CacheBuilder.newBuilder()
+                                .expireAfterWrite(15, TimeUnit.MINUTES)  // User-company cache expiry
+                                .maximumSize(1000)  // Adjust based on typical users per campaign
+                                .build(new CacheLoader<String, Boolean>() {
+                                    @Override
+                                    public Boolean load(String key) {
+                                        // Default value for cache miss
+                                        return false;
+                                    }
+                                });
+                    }
+                });
+    }
+    
     /**
      * Get the next eligible campaign for a user based on rotation rules.
-     * 
-     * @param requestDate Request date in format yyyyMMdd
-     * @param companyId Company identifier
-     * @param userId User identifier
-     * @return Next eligible campaign
-     * @throws DataHandlingException if there's an issue with data handling
      */
     @Transactional
     public CampaignResponseDTO getNextEligibleCampaignForUser(String requestDate, String companyId, String userId) 
@@ -46,36 +72,70 @@ public class UserCampaignRotationService {
                         "No eligible campaigns found for the company on the requested date");
             }
             
+            // Validate that the user belongs to the company for at least one of the eligible campaigns
+            boolean validatedForAnyCampaign = false;
+            for (CampaignMapping campaign : eligibleCampaigns) {
+                if (validateUserBelongsToCompany(userId, companyId, campaign.getId())) {
+                    validatedForAnyCampaign = true;
+                    break;
+                }
+            }
+            
+            if (!validatedForAnyCampaign) {
+                log.warn("User {} is not enrolled in any eligible campaigns for company {}", userId, companyId);
+                throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(),
+                        "User is not enrolled in any eligible campaigns for this company");
+            }
+            
             // Get the user's current campaign state
             UserCampaignState userState = getUserCampaignState(userId, companyId, eligibleCampaigns, weekStartDate);
             
             // Check if user has a current campaign that still has available frequency
             if (userState.currentCampaign != null && userState.hasRemainingFrequency) {
-                // User has a campaign with remaining frequency
-                CampaignMapping campaign = userState.currentCampaign;
-                
-                log.info("User has remaining frequency for campaign: {} ({})", 
-                        campaign.getName(), campaign.getId());
-                
-                // Apply the view
-                UserCampaignTracker updatedTracker = applyUserView(
-                        userId, companyId, campaign.getId(), currentDate, weekStartDate);
-                
-                // Prepare response
-                CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(campaign);
-                response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
-                response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
-                
-                return response;
+                // Verify user is enrolled in this specific campaign
+                if (!validateUserBelongsToCompany(userId, companyId, userState.currentCampaign.getId())) {
+                    log.warn("User {} is not enrolled in current campaign {} for company {}", 
+                            userId, userState.currentCampaign.getId(), companyId);
+                    // Skip to finding a new campaign below
+                } else {
+                    // User has a campaign with remaining frequency and is enrolled
+                    CampaignMapping campaign = userState.currentCampaign;
+                    
+                    log.info("User has remaining frequency for campaign: {} ({})", 
+                            campaign.getName(), campaign.getId());
+                    
+                    // Apply the view
+                    UserCampaignTracker updatedTracker = applyUserView(
+                            userId, companyId, campaign.getId(), currentDate, weekStartDate);
+                    
+                    // Prepare response
+                    CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(campaign);
+                    response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
+                    response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
+                    
+                    return response;
+                }
             }
             
             // If we get here, either:
             // 1. User doesn't have a current campaign assigned
             // 2. User's current campaign is exhausted
+            // 3. User is not enrolled in their current campaign
+            
+            // Filter campaigns to only those the user is enrolled in
+            List<CampaignMapping> enrolledCampaigns = eligibleCampaigns.stream()
+                    .filter(campaign -> validateUserBelongsToCompany(userId, companyId, campaign.getId()))
+                    .collect(Collectors.toList());
+            
+            if (enrolledCampaigns.isEmpty()) {
+                log.info("No enrolled campaigns found for user {} in company {}", userId, companyId);
+                throw new DataHandlingException(HttpStatus.OK.toString(),
+                        "No enrolled campaigns found for this user");
+            }
             
             // Get the next available campaign for this user
             CampaignMapping nextCampaign = getNextAvailableCampaign(
-                    userState.currentCampaign, eligibleCampaigns, userState.allUserTrackers);
+                    userState.currentCampaign, enrolledCampaigns, userState.allUserTrackers);
             
             if (nextCampaign == null) {
                 log.info("No more available campaigns for user {} in company {}", userId, companyId);
@@ -103,6 +163,94 @@ public class UserCampaignRotationService {
             log.error("Unexpected error: {}", e.getMessage(), e);
             throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
                     "Unexpected error: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Validate that a user belongs to a company for a specific campaign
+     * Returns true if validation passes, false otherwise
+     */
+    private boolean validateUserBelongsToCompany(String userId, String companyId, String campaignId) {
+        String userCompanyKey = userId + ":" + companyId;
+        
+        try {
+            // Try to get from cache first
+            LoadingCache<String, Boolean> campaignCache = userCompanyValidationCache.get(campaignId);
+            Boolean isValid = campaignCache.getIfPresent(userCompanyKey);
+            
+            if (isValid != null && isValid) {
+                // Cache hit with valid result
+                return true;
+            }
+            
+            // Cache miss or invalid result, need to check with service
+            List<UserCompanyDTO> enrolledUsers = rmManageCampaignService.getEnrolledUsers(campaignId);
+            
+            // Check if the user-company pair exists in the enrolled users
+            boolean userCompanyFound = enrolledUsers.stream()
+                    .anyMatch(user -> user.getUserName().equals(userId) && 
+                                    user.getCompanyName().equals(companyId));
+            
+            // Store result in cache for future queries
+            if (userCompanyFound) {
+                campaignCache.put(userCompanyKey, true);
+            }
+            
+            return userCompanyFound;
+            
+        } catch (Exception e) {
+            log.error("Error validating user-company relationship for campaign {}: {}", 
+                    campaignId, e.getMessage(), e);
+            // In case of error, we err on the side of caution and return false
+            return false;
+        }
+    }
+    
+    /**
+     * Refresh user-company validation cache for specific campaigns periodically
+     */
+    @Scheduled(fixedRate = 900000) // 15 minutes in milliseconds
+    public void refreshUserCompanyCache() {
+        try {
+            log.info("Refreshing user-company validation cache");
+            
+            // Get active campaigns
+            List<CampaignMapping> activeCampaigns = campaignRepository.findByStatus("ACTIVE");
+            
+            for (CampaignMapping campaign : activeCampaigns) {
+                try {
+                    String campaignId = campaign.getId();
+                    List<UserCompanyDTO> enrolledUsers = rmManageCampaignService.getEnrolledUsers(campaignId);
+                    
+                    // Create a new cache for this campaign
+                    LoadingCache<String, Boolean> newCampaignCache = CacheBuilder.newBuilder()
+                            .expireAfterWrite(15, TimeUnit.MINUTES)
+                            .maximumSize(1000)
+                            .build(new CacheLoader<String, Boolean>() {
+                                @Override
+                                public Boolean load(String key) { return false; }
+                            });
+                    
+                    // Populate with all valid user-company pairs
+                    for (UserCompanyDTO user : enrolledUsers) {
+                        String userCompanyKey = user.getUserName() + ":" + user.getCompanyName();
+                        newCampaignCache.put(userCompanyKey, true);
+                    }
+                    
+                    // Replace existing cache for this campaign
+                    userCompanyValidationCache.put(campaignId, newCampaignCache);
+                    
+                    log.info("Refreshed cache for campaign {} with {} enrolled users", 
+                            campaignId, enrolledUsers.size());
+                } catch (Exception e) {
+                    log.error("Error refreshing cache for campaign {}: {}", 
+                            campaign.getId(), e.getMessage(), e);
+                }
+            }
+            
+            log.info("Successfully refreshed user-company validation cache");
+        } catch (Exception e) {
+            log.error("Error refreshing user-company cache: {}", e.getMessage(), e);
         }
     }
     
