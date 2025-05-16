@@ -1,7 +1,5 @@
 @Service
 @Slf4j
-@Service
-@Slf4j
 public class UserCampaignRotationService {
 
     @Autowired
@@ -19,32 +17,12 @@ public class UserCampaignRotationService {
     @Autowired
     private RmManageCampaignService rmManageCampaignService;
     
-    // Two-level cache: campaignId -> (userId:companyId -> Boolean)
-    private LoadingCache<String, LoadingCache<String, Boolean>> userCompanyValidationCache;
+    // Simple two-level cache implementation
+    // Map of campaignId -> Map of (userId:companyId -> timestamp)
+    private Map<String, Map<String, Long>> validationCache = new ConcurrentHashMap<>();
     
-    @PostConstruct
-    public void init() {
-        // Initialize the two-level cache
-        userCompanyValidationCache = CacheBuilder.newBuilder()
-                .expireAfterWrite(30, TimeUnit.MINUTES)  // Campaign-level cache expiry
-                .maximumSize(100)  // Assuming you have a reasonable number of campaigns
-                .build(new CacheLoader<String, LoadingCache<String, Boolean>>() {
-                    @Override
-                    public LoadingCache<String, Boolean> load(String campaignId) {
-                        // Create a new cache for each campaign
-                        return CacheBuilder.newBuilder()
-                                .expireAfterWrite(15, TimeUnit.MINUTES)  // User-company cache expiry
-                                .maximumSize(1000)  // Adjust based on typical users per campaign
-                                .build(new CacheLoader<String, Boolean>() {
-                                    @Override
-                                    public Boolean load(String key) {
-                                        // Default value for cache miss
-                                        return false;
-                                    }
-                                });
-                    }
-                });
-    }
+    // Cache expiry time in milliseconds (15 minutes)
+    private static final long CACHE_EXPIRY_MS = 15 * 60 * 1000;
     
     /**
      * Get the next eligible campaign for a user based on rotation rules.
@@ -172,18 +150,20 @@ public class UserCampaignRotationService {
      */
     private boolean validateUserBelongsToCompany(String userId, String companyId, String campaignId) {
         String userCompanyKey = userId + ":" + companyId;
+        long currentTime = System.currentTimeMillis();
         
         try {
-            // Try to get from cache first
-            LoadingCache<String, Boolean> campaignCache = userCompanyValidationCache.get(campaignId);
-            Boolean isValid = campaignCache.getIfPresent(userCompanyKey);
-            
-            if (isValid != null && isValid) {
-                // Cache hit with valid result
-                return true;
+            // Check cache first
+            Map<String, Long> campaignCache = validationCache.get(campaignId);
+            if (campaignCache != null) {
+                Long timestamp = campaignCache.get(userCompanyKey);
+                if (timestamp != null && (currentTime - timestamp) < CACHE_EXPIRY_MS) {
+                    // Cache hit with valid timestamp
+                    return true;
+                }
             }
             
-            // Cache miss or invalid result, need to check with service
+            // Cache miss or expired, check with service
             List<UserCompanyDTO> enrolledUsers = rmManageCampaignService.getEnrolledUsers(campaignId);
             
             // Check if the user-company pair exists in the enrolled users
@@ -191,9 +171,14 @@ public class UserCampaignRotationService {
                     .anyMatch(user -> user.getUserName().equals(userId) && 
                                     user.getCompanyName().equals(companyId));
             
-            // Store result in cache for future queries
+            // Update cache if validation passed
             if (userCompanyFound) {
-                campaignCache.put(userCompanyKey, true);
+                // Get or create campaign cache
+                Map<String, Long> userCompanyCache = validationCache.computeIfAbsent(
+                        campaignId, k -> new ConcurrentHashMap<>());
+                
+                // Store with current timestamp
+                userCompanyCache.put(userCompanyKey, currentTime);
             }
             
             return userCompanyFound;
@@ -210,35 +195,30 @@ public class UserCampaignRotationService {
      * Refresh user-company validation cache for specific campaigns periodically
      */
     @Scheduled(fixedRate = 900000) // 15 minutes in milliseconds
-    public void refreshUserCompanyCache() {
+    public void refreshValidationCache() {
         try {
             log.info("Refreshing user-company validation cache");
             
             // Get active campaigns
             List<CampaignMapping> activeCampaigns = campaignRepository.findByStatus("ACTIVE");
+            long currentTime = System.currentTimeMillis();
             
             for (CampaignMapping campaign : activeCampaigns) {
                 try {
                     String campaignId = campaign.getId();
                     List<UserCompanyDTO> enrolledUsers = rmManageCampaignService.getEnrolledUsers(campaignId);
                     
-                    // Create a new cache for this campaign
-                    LoadingCache<String, Boolean> newCampaignCache = CacheBuilder.newBuilder()
-                            .expireAfterWrite(15, TimeUnit.MINUTES)
-                            .maximumSize(1000)
-                            .build(new CacheLoader<String, Boolean>() {
-                                @Override
-                                public Boolean load(String key) { return false; }
-                            });
+                    // Create a new cache map for this campaign
+                    Map<String, Long> newCampaignCache = new ConcurrentHashMap<>();
                     
                     // Populate with all valid user-company pairs
                     for (UserCompanyDTO user : enrolledUsers) {
                         String userCompanyKey = user.getUserName() + ":" + user.getCompanyName();
-                        newCampaignCache.put(userCompanyKey, true);
+                        newCampaignCache.put(userCompanyKey, currentTime);
                     }
                     
                     // Replace existing cache for this campaign
-                    userCompanyValidationCache.put(campaignId, newCampaignCache);
+                    validationCache.put(campaignId, newCampaignCache);
                     
                     log.info("Refreshed cache for campaign {} with {} enrolled users", 
                             campaignId, enrolledUsers.size());
@@ -248,11 +228,41 @@ public class UserCampaignRotationService {
                 }
             }
             
+            // Clean up expired entries from the cache
+            cleanupExpiredCacheEntries();
+            
             log.info("Successfully refreshed user-company validation cache");
         } catch (Exception e) {
             log.error("Error refreshing user-company cache: {}", e.getMessage(), e);
         }
     }
+    
+    /**
+     * Clean up expired entries from the validation cache
+     */
+    private void cleanupExpiredCacheEntries() {
+        long currentTime = System.currentTimeMillis();
+        
+        for (Map.Entry<String, Map<String, Long>> campaignEntry : validationCache.entrySet()) {
+            Map<String, Long> userCompanyMap = campaignEntry.getValue();
+            
+            // Remove expired entries
+            Iterator<Map.Entry<String, Long>> iterator = userCompanyMap.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<String, Long> entry = iterator.next();
+                if ((currentTime - entry.getValue()) >= CACHE_EXPIRY_MS) {
+                    iterator.remove();
+                }
+            }
+            
+            // If all entries were removed, remove the campaign from the cache
+            if (userCompanyMap.isEmpty()) {
+                validationCache.remove(campaignEntry.getKey());
+            }
+        }
+    }
+    
+    // Rest of your service code remains the same
     
     /**
      * Get all eligible campaigns for a company
