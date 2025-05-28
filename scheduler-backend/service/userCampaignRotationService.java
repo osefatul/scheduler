@@ -1,3 +1,4 @@
+// Complete UserCampaignRotationService.java
 package com.usbank.corp.dcr.api.service;
 
 import com.usbank.corp.dcr.api.entity.CampaignMapping;
@@ -9,12 +10,13 @@ import com.usbank.corp.dcr.api.model.UserDTO;
 import com.usbank.corp.dcr.api.repository.CampaignRepository;
 import com.usbank.corp.dcr.api.repository.UserCampaignTrackerRepository;
 import com.usbank.corp.dcr.api.util.RotationUtils;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import javax.servlet.http.HttpSession;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -42,20 +44,25 @@ public class UserCampaignRotationService {
     @Autowired
     private CampaignCompanyService campaignCompanyService;
 
-    // Simple two-level cache implementation
-    // Map of campaignId -> Map of (userId:companyId -> timestamp)
-    private Map<String, Map<String, Long>> validationCache = new ConcurrentHashMap<>();
+    @Autowired
+    private UserInsightPreferenceService preferenceService;
 
-    // Cache expiry time in milliseconds (15 minutes)
-    private static final long CACHE_EXPIRY_MS = 15 * 60 * 1000;
+    @Autowired
+    private UserSessionService sessionService;
+
+    // Simple cache for user validation
+    private Map<String, Map<String, Long>> validationCache = new ConcurrentHashMap<>();
+    private static final long CACHE_EXPIRY_MS = 15 * 60 * 1000; // 15 minutes
 
     /**
-     * Get the next eligible campaign for a user based on rotation rules.
-     * This version enforces one campaign per week rule.
+     * Main method: Get the next eligible campaign for a user with session management.
+     * Session is treated as one view regardless of page refreshes.
      */
     @Transactional
-    public CampaignResponseDTO getNextEligibleCampaignForUser(String requestDate, String companyId, String userId) 
+    public CampaignResponseDTO getNextEligibleCampaignWithSession(
+            String requestDate, String companyId, String userId, HttpSession session) 
             throws DataHandlingException {
+        
         try {
             // Convert date format
             String formattedDate = rotationUtils.convertDate(requestDate);
@@ -63,146 +70,174 @@ public class UserCampaignRotationService {
             Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
             
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
-            log.info(String.format("Processing request for user {} in company {} on date {}", 
-                    userId, companyId, sdf.format(currentDate)));
+            log.info("Processing session-based request for user {} in company {} on date {}", 
+                    userId, companyId, sdf.format(currentDate));
             
-            // Get all eligible campaigns for the company
+            // 1. Get all eligible campaigns for the company
             List<CampaignMapping> eligibleCampaigns = getEligibleCampaigns(companyId, currentDate);
             
             if (eligibleCampaigns.isEmpty()) {
-                log.info(String.format("No eligible campaigns found for company {} on date {}", 
-                        companyId, sdf.format(currentDate)));
                 throw new DataHandlingException(HttpStatus.OK.toString(),
                         "No eligible campaigns found for the company on the requested date");
             }
             
-            // Validate that the user belongs to the company for at least one of the eligible campaigns
-            boolean validatedForAnyCampaign = false;
-            for (CampaignMapping campaign : eligibleCampaigns) {
-                if (validateUserBelongsToCompany(userId, companyId, campaign.getId())) {
-                    validatedForAnyCampaign = true;
-                    break;
-                }
-            }
-            
-            if (!validatedForAnyCampaign) {
-                log.warn(String.format("User {} is not enrolled in any eligible campaigns for company {}", userId, companyId));
-                throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(),
-                        "User is not enrolled in any eligible campaigns for this company");
-            }
-            
-            // Check if the user already has a campaign assigned for this week
-            List<UserCampaignTracker> weeklyTrackers = userTrackerRepository
-                    .findByUserIdAndCompanyIdAndWeekStartDate(userId, companyId, weekStartDate);
-            
-            if (!weeklyTrackers.isEmpty()) {
-                // User already has a campaign assigned for this week
-                
-                // Find the campaign assigned for this week (should be only one due to one-campaign-per-week rule)
-                UserCampaignTracker weeklyTracker = weeklyTrackers.get(0);
-                
-                // Check if this campaign has remaining weekly frequency
-                if (weeklyTracker.getRemainingWeeklyFrequency() <= 0) {
-                    // Weekly frequency exhausted, no more views for this week
-                    log.info(String.format("User %s has exhausted weekly frequency for campaign %s", 
-                            userId, weeklyTracker.getCampaignId()));
-                    throw new DataHandlingException(HttpStatus.OK.toString(),
-                            "No more views available for this week");
-                }
-                
-                // Check if this campaign has remaining display cap
-                if (weeklyTracker.getRemainingDisplayCap() <= 0) {
-                    // Display cap exhausted, no more views of this campaign ever
-                    log.info(String.format("User %s has exhausted display cap for campaign %s", 
-                            userId, weeklyTracker.getCampaignId()));
-                    throw new DataHandlingException(HttpStatus.OK.toString(),
-                            "This campaign has reached its display cap limit");
-                }
-                
-                // Get the campaign details
-                Optional<CampaignMapping> campaignOpt = campaignRepository.findById(weeklyTracker.getCampaignId());
-                if (!campaignOpt.isPresent()) {
-                    throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
-                            "Campaign not found for tracker");
-                }
-                
-                CampaignMapping campaign = campaignOpt.get();
-                
-                // Verify user is still enrolled in this campaign
-                if (!validateUserBelongsToCompany(userId, companyId, campaign.getId())) {
-                    log.warn(String.format("User %s is no longer enrolled in campaign %s", userId, campaign.getId()));
-                    // Since we enforce one campaign per week, and the user is no longer enrolled in their 
-                    // assigned campaign, they can't see any campaigns this week
-                    throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(),
-                            "User is no longer enrolled in the assigned campaign for this week");
-                }
-                
-                // Verify campaign is still eligible
-                if (!isEligibleForRotation(campaign, currentDate)) {
-                    log.warn(String.format("Campaign %s is no longer eligible for rotation", campaign.getId()));
-                    throw new DataHandlingException(HttpStatus.OK.toString(),
-                            "Assigned campaign is no longer eligible");
-                }
-                
-                // Apply the view
-                UserCampaignTracker updatedTracker = applyUserView(
-                        userId, companyId, campaign.getId(), currentDate, weekStartDate);
-                
-                // Prepare response
-                CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(campaign);
-                response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
-                response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
-                
-                return response;
-            }
-            
-            // If we get here, the user doesn't have a campaign assigned for this week yet
-            // We need to select the next campaign in rotation
-            
-            // Find all campaigns the user is enrolled in
-            List<CampaignMapping> enrolledCampaigns = eligibleCampaigns.stream()
+            // 2. Filter campaigns based on user preferences and enrollment
+            List<CampaignMapping> userEligibleCampaigns = eligibleCampaigns.stream()
+                    .filter(campaign -> preferenceService.isUserEligibleForCampaign(userId, companyId, campaign.getId()))
                     .filter(campaign -> validateUserBelongsToCompany(userId, companyId, campaign.getId()))
                     .collect(Collectors.toList());
             
-            if (enrolledCampaigns.isEmpty()) {
-                log.info(String.format("No enrolled campaigns found for user %s in company %s", userId, companyId));
+            if (userEligibleCampaigns.isEmpty()) {
                 throw new DataHandlingException(HttpStatus.OK.toString(),
-                        "No enrolled campaigns found for this user");
+                        "No eligible campaigns found for this user");
             }
             
-            // Get the last campaign assigned to this user (from any previous week)
-            CampaignMapping lastAssignedCampaign = getLastAssignedCampaign(userId, companyId);
+            // 3. Check if user already has a campaign assigned for this week
+            List<UserCampaignTracker> weeklyTrackers = userTrackerRepository
+                    .findByUserIdAndCompanyIdAndWeekStartDate(userId, companyId, weekStartDate);
             
-            // Get the next campaign in rotation
-            CampaignMapping nextCampaign = getNextCampaignInRotation(lastAssignedCampaign, enrolledCampaigns);
+            CampaignMapping selectedCampaign;
+            UserCampaignTracker tracker;
             
-            if (nextCampaign == null) {
-                log.info(String.format("No next campaign available for user %s in company %s", userId, companyId));
-                throw new DataHandlingException(HttpStatus.OK.toString(),
-                        "No available campaigns found for this user");
+            if (!weeklyTrackers.isEmpty()) {
+                // User has existing campaign for this week
+                UserCampaignTracker weeklyTracker = weeklyTrackers.get(0);
+                
+                // Validate campaign still eligible
+                Optional<CampaignMapping> campaignOpt = campaignRepository.findById(weeklyTracker.getCampaignId());
+                if (!campaignOpt.isPresent() || 
+                    !preferenceService.isUserEligibleForCampaign(userId, companyId, weeklyTracker.getCampaignId()) ||
+                    !isEligibleForRotation(campaignOpt.get(), currentDate)) {
+                    throw new DataHandlingException(HttpStatus.OK.toString(),
+                            "Assigned campaign is no longer available");
+                }
+                
+                selectedCampaign = campaignOpt.get();
+                tracker = weeklyTracker;
+                
+                log.info("Using existing weekly assignment: user {} has campaign {} for week {}", 
+                        userId, selectedCampaign.getName(), weekStartDate);
+                
+            } else {
+                // Get next campaign in rotation for new week assignment
+                CampaignMapping lastAssignedCampaign = getLastAssignedCampaign(userId, companyId);
+                selectedCampaign = getNextCampaignInRotation(lastAssignedCampaign, userEligibleCampaigns);
+                
+                if (selectedCampaign == null) {
+                    throw new DataHandlingException(HttpStatus.OK.toString(),
+                            "No available campaigns for rotation");
+                }
+                
+                // Create new tracker for this week
+                tracker = createTrackerForWeek(userId, companyId, selectedCampaign.getId(), 
+                        currentDate, weekStartDate);
+                
+                log.info("Assigned new campaign {} to user {} for week starting {}", 
+                        selectedCampaign.getName(), userId, weekStartDate);
             }
             
-            log.info(String.format("Assigning new campaign to user %s for this week: %s (%s)", 
-                    userId, nextCampaign.getName(), nextCampaign.getId()));
+            // 4. Prepare response with current capacity
+            CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(selectedCampaign);
             
-            // Apply the view to the new campaign
-            UserCampaignTracker updatedTracker = applyUserView(
-                    userId, companyId, nextCampaign.getId(), currentDate, weekStartDate);
+            // Check if this campaign was already viewed in current session
+            boolean viewedInSession = sessionService.hasCampaignBeenViewedInSession(
+                    session, userId, companyId, selectedCampaign.getId());
             
-            // Prepare response
-            CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(nextCampaign);
-            response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
-            response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
+            // Set remaining capacity
+            if (viewedInSession) {
+                // Already viewed in session, show reduced capacity (what it will be after session ends)
+                response.setDisplayCapping(Math.max(0, tracker.getRemainingDisplayCap() - 1));
+                response.setFrequencyPerWeek(Math.max(0, tracker.getRemainingWeeklyFrequency() - 1));
+            } else {
+                // Not yet viewed in session, show current capacity
+                response.setDisplayCapping(tracker.getRemainingDisplayCap());
+                response.setFrequencyPerWeek(tracker.getRemainingWeeklyFrequency());
+            }
+            
+            response.setAlreadyViewedInSession(viewedInSession);
             
             return response;
             
         } catch (DataHandlingException e) {
             throw e;
         } catch (Exception e) {
-            log.error(String.format("Unexpected error: %s", e.getMessage()), e);
+            log.error("Unexpected error in session-based campaign rotation: {}", e.getMessage(), e);
             throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
                     "Unexpected error: " + e.getMessage());
         }
+    }
+    
+    /**
+     * Create tracker for the week without applying view (session will handle the view)
+     */
+    private UserCampaignTracker createTrackerForWeek(
+            String userId, String companyId, String campaignId,
+            Date currentDate, Date weekStartDate) {
+        
+        log.info("Creating tracker for user {} campaign {} week {}", userId, campaignId, weekStartDate);
+        
+        // Check if tracker already exists for this week
+        Optional<UserCampaignTracker> existing = userTrackerRepository
+                .findByUserIdAndCompanyIdAndCampaignIdAndWeekStartDate(
+                        userId, companyId, campaignId, weekStartDate);
+        
+        if (existing.isPresent()) {
+            log.info("Tracker already exists for user {} campaign {} week {}", userId, campaignId, weekStartDate);
+            return existing.get();
+        }
+        
+        // Create new tracker
+        UserCampaignTracker tracker = new UserCampaignTracker();
+        tracker.setId(UUID.randomUUID().toString());
+        tracker.setUserId(userId);
+        tracker.setCompanyId(companyId);
+        tracker.setCampaignId(campaignId);
+        tracker.setWeekStartDate(weekStartDate);
+        
+        // Get campaign details for initial values
+        Optional<CampaignMapping> campaignOpt = campaignRepository.findById(campaignId);
+        if (campaignOpt.isPresent()) {
+            CampaignMapping campaign = campaignOpt.get();
+            tracker.setRemainingWeeklyFrequency(campaign.getFrequencyPerWeek());
+            
+            // Handle display cap from existing trackers if any
+            List<UserCampaignTracker> existingTrackers = userTrackerRepository
+                    .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
+            
+            if (!existingTrackers.isEmpty()) {
+                // Find the most recent tracker to get remaining display cap
+                UserCampaignTracker mostRecent = existingTrackers.stream()
+                        .max(Comparator.comparing(t -> t.getLastViewDate() != null ? 
+                                t.getLastViewDate() : new Date(0)))
+                        .orElse(null);
+                
+                if (mostRecent != null) {
+                    tracker.setRemainingDisplayCap(mostRecent.getRemainingDisplayCap());
+                    log.info("Using existing display cap {} for user {} campaign {}", 
+                            mostRecent.getRemainingDisplayCap(), userId, campaignId);
+                } else {
+                    tracker.setRemainingDisplayCap(campaign.getDisplayCapping());
+                }
+            } else {
+                // First time with this campaign
+                tracker.setRemainingDisplayCap(campaign.getDisplayCapping());
+                log.info("Setting initial display cap {} for user {} campaign {}", 
+                        campaign.getDisplayCapping(), userId, campaignId);
+            }
+        } else {
+            // Default values if campaign not found (shouldn't happen)
+            log.warn("Campaign {} not found when creating tracker, using defaults", campaignId);
+            tracker.setRemainingWeeklyFrequency(5);
+            tracker.setRemainingDisplayCap(10);
+        }
+        
+        // Don't set lastViewDate yet - that happens when session ends
+        tracker.setLastViewDate(null);
+        
+        log.info("Created new tracker for user {} campaign {}: weeklyFreq={}, displayCap={}", 
+                userId, campaignId, tracker.getRemainingWeeklyFrequency(), tracker.getRemainingDisplayCap());
+        
+        return userTrackerRepository.save(tracker);
     }
     
     /**
@@ -210,11 +245,13 @@ public class UserCampaignRotationService {
      */
     private CampaignMapping getLastAssignedCampaign(String userId, String companyId) {
         try {
-            // Find all trackers for this user and company
+            log.info("Getting last assigned campaign for user {} company {}", userId, companyId);
+            
             List<UserCampaignTracker> allTrackers = userTrackerRepository
                     .findByUserIdAndCompanyId(userId, companyId);
             
             if (allTrackers.isEmpty()) {
+                log.info("No previous campaign assignments for user {} company {}", userId, companyId);
                 return null;
             }
             
@@ -224,6 +261,7 @@ public class UserCampaignRotationService {
                     .orElse(null);
             
             if (mostRecentTracker == null) {
+                log.info("No recent tracker found for user {} company {}", userId, companyId);
                 return null;
             }
             
@@ -231,9 +269,18 @@ public class UserCampaignRotationService {
             Optional<CampaignMapping> campaignOpt = campaignRepository
                     .findById(mostRecentTracker.getCampaignId());
             
-            return campaignOpt.orElse(null);
+            if (campaignOpt.isPresent()) {
+                log.info("Last assigned campaign for user {} was {} in week {}", 
+                        userId, campaignOpt.get().getName(), mostRecentTracker.getWeekStartDate());
+                return campaignOpt.get();
+            } else {
+                log.warn("Last assigned campaign {} not found for user {}", 
+                        mostRecentTracker.getCampaignId(), userId);
+                return null;
+            }
         } catch (Exception e) {
-            log.error(String.format("Error getting last assigned campaign: %s", e.getMessage()), e);
+            log.error("Error getting last assigned campaign for user {} company {}: {}", 
+                    userId, companyId, e.getMessage(), e);
             return null;
         }
     }
@@ -246,15 +293,17 @@ public class UserCampaignRotationService {
             List<CampaignMapping> eligibleCampaigns) {
         
         if (eligibleCampaigns.isEmpty()) {
+            log.warn("No eligible campaigns provided for rotation");
             return null;
         }
         
         // If this is the first campaign for the user, return the first eligible one
         if (lastCampaign == null) {
+            log.info("No previous campaign, selecting first eligible: {}", eligibleCampaigns.get(0).getName());
             return eligibleCampaigns.get(0);
         }
         
-        // Find last campaign's position in eligible campaigns
+        // Find last campaign's position in eligible campaigns list
         int lastIndex = -1;
         for (int i = 0; i < eligibleCampaigns.size(); i++) {
             if (eligibleCampaigns.get(i).getId().equals(lastCampaign.getId())) {
@@ -263,26 +312,32 @@ public class UserCampaignRotationService {
             }
         }
         
-        // If not found (campaign no longer eligible), start from beginning
+        // If last campaign not found in current eligible list, start from beginning
         if (lastIndex == -1) {
+            log.info("Last campaign {} not in current eligible list, starting from first: {}", 
+                    lastCampaign.getName(), eligibleCampaigns.get(0).getName());
             return eligibleCampaigns.get(0);
         }
         
-        // Get the next campaign in rotation
+        // Get the next campaign in rotation (circular)
         int nextIndex = (lastIndex + 1) % eligibleCampaigns.size();
-        return eligibleCampaigns.get(nextIndex);
+        CampaignMapping nextCampaign = eligibleCampaigns.get(nextIndex);
+        
+        log.info("Rotating from {} to {} (index {} to {})", 
+                lastCampaign.getName(), nextCampaign.getName(), lastIndex, nextIndex);
+        
+        return nextCampaign;
     }
     
     /**
      * Validate that a user belongs to a company for a specific campaign
-     * Returns true if validation passes, false otherwise
+     * Uses caching to reduce external API calls
      */
     private boolean validateUserBelongsToCompany(String userId, String companyId, String campaignId) {
         String userCompanyKey = userId + ":" + companyId;
         
-        // Give us log of this
-        log.info(String.format("Validating user-company relationship for campaign %s: userId=%s, companyId=%s", 
-                campaignId, userId, companyId));
+        log.debug("Validating user-company relationship for campaign {}: userId={}, companyId={}", 
+                campaignId, userId, companyId);
         
         long currentTime = System.currentTimeMillis();
         try {
@@ -291,127 +346,44 @@ public class UserCampaignRotationService {
             if (campaignCache != null) {
                 Long timestamp = campaignCache.get(userCompanyKey);
                 if (timestamp != null && (currentTime - timestamp) < CACHE_EXPIRY_MS) {
-                    // Cache hit with valid timestamp
+                    log.debug("Cache hit for user {} company {} campaign {}", userId, companyId, campaignId);
                     return true;
                 }
             }
             
-            log.info(String.format("Fetching enrolled users for campaign ID: %s", campaignId));
+            log.debug("Cache miss or expired, fetching enrolled users for campaign {}", campaignId);
+            
             // Cache miss or expired, check with service
             EnrolledUserDTO enrolledUsersDTO = rmManageCampaignService.getEnrolledUsers(campaignId);
-            log.info(String.format("Checking if user-company pair exists in enrolled users DTO: %s", enrolledUsersDTO));
-            // Check if the user-company pair exists in the enrolled users
-            // We need to check the usersList field in enrolledUsersDTO
+            
             boolean userCompanyFound = false;
             if (enrolledUsersDTO != null && enrolledUsersDTO.getUsersList() != null) {
-                log.info(String.format("Enrolled users list is not null. Iterating through the list."));
-                // Use the usersList field to find matching user-company pair
                 for (UserDTO user : enrolledUsersDTO.getUsersList()) {
-                    log.debug(String.format("Checking user: userName=%s, companyName=%s", user.getUserName(), user.getCompanyName()));
                     if (user.getUserName().equals(userId) && user.getCompanyName().equals(companyId)) {
-                        log.info(String.format("User-company pair found: userId=%s, companyId=%s", userId, companyId));
                         userCompanyFound = true;
+                        log.debug("Found user {} in company {} for campaign {}", userId, companyId, campaignId);
                         break;
                     }
                 }
             } else {
-                log.warn(String.format("Enrolled users list is null or empty for campaign ID: %s", campaignId));
+                log.warn("No enrolled users data for campaign {}", campaignId);
             }
             
             if (userCompanyFound) {
-                log.info(String.format("Updating cache for campaign ID: %s with user-company pair: %s", campaignId, userCompanyKey));
-                // Get or create campaign cache
+                // Update cache
                 Map<String, Long> userCompanyCache = validationCache.computeIfAbsent(
                         campaignId, k -> new ConcurrentHashMap<>());
-                
-                // Store with current timestamp
                 userCompanyCache.put(userCompanyKey, currentTime);
-                
-                log.info(String.format("Cache updated successfully for campaign ID: %s", campaignId));
+                log.debug("Updated cache for user {} company {} campaign {}", userId, companyId, campaignId);
             } else {
-                log.warn(String.format("User-company pair not found for userId=%s and companyId=%s in campaign ID: %s", userId, 
-                        companyId, campaignId));
+                log.info("User {} not enrolled in campaign {} for company {}", userId, campaignId, companyId);
             }
             
-            log.info(String.format("Returning validation result: %s", userCompanyFound));
             return userCompanyFound;
         } catch (Exception e) {
-            log.error(String.format("Error validating user-company relationship for campaign %s: %s", 
-                    campaignId, e.getMessage()), e);
-            // In case of error, we err on the side of caution and return false
+            log.error("Error validating user-company relationship for campaign {}: {}", 
+                    campaignId, e.getMessage(), e);
             return false;
-        }
-    }
-    
-    /**
-     * Refresh user-company validation cache for specific campaigns periodically
-     */
-    @Scheduled(fixedRate = 900000) // 15 minutes in milliseconds
-    public void refreshValidationCache() {
-        try {
-            log.info(String.format("Refreshing user-company validation cache"));
-            
-            // Get active campaigns
-            List<CampaignMapping> activeCampaigns = campaignRepository.findByStatus("ACTIVE");
-            long currentTime = System.currentTimeMillis();
-            
-            for (CampaignMapping campaign : activeCampaigns) {
-                try {
-                    String campaignId = campaign.getId();
-                    EnrolledUserDTO enrolledUsersDTO = rmManageCampaignService.getEnrolledUsers(campaignId);
-                    
-                    // Create a new cache map for this campaign
-                    Map<String, Long> newCampaignCache = new ConcurrentHashMap<>();
-                    
-                    // Populate with all valid user-company pairs
-                    if (enrolledUsersDTO != null && enrolledUsersDTO.getUsersList() != null) {
-                        for (UserDTO user : enrolledUsersDTO.getUsersList()) {
-                            String userCompanyKey = user.getUserName() + ":" + user.getCompanyName();
-                            newCampaignCache.put(userCompanyKey, currentTime);
-                        }
-                    }
-                    
-                    // Replace existing cache for this campaign
-                    validationCache.put(campaignId, newCampaignCache);
-                    
-                    log.info(String.format("Refreshed cache for campaign %s with %d enrolled users", 
-                            campaignId, 
-                            enrolledUsersDTO != null && enrolledUsersDTO.getUsersList() != null ? 
-                                    enrolledUsersDTO.getUsersList().size() : 0));
-                } catch (Exception e) {
-                    log.error(String.format("Error refreshing cache for campaign %s: %s", 
-                            campaign.getId(), e.getMessage()), e);
-                }
-            }
-            
-            // Clean up expired entries from the cache
-            cleanupExpiredCacheEntries();
-            
-            log.info(String.format("Successfully refreshed user-company validation cache"));
-        } catch (Exception e) {
-            log.error(String.format("Error refreshing user-company cache: %s", e.getMessage()), e);
-        }
-    }
-    
-    private void cleanupExpiredCacheEntries() {
-        long currentTime = System.currentTimeMillis();
-        
-        for (Map.Entry<String, Map<String, Long>> campaignEntry : validationCache.entrySet()) {
-            Map<String, Long> userCompanyMap = campaignEntry.getValue();
-            
-            // Remove expired entries
-            Iterator<Map.Entry<String, Long>> iterator = userCompanyMap.entrySet().iterator();
-            while (iterator.hasNext()) {
-                Map.Entry<String, Long> entry = iterator.next();
-                if ((currentTime - entry.getValue()) >= CACHE_EXPIRY_MS) {
-                    iterator.remove();
-                }
-            }
-            
-            // If all entries were removed, remove the campaign from the cache
-            if (userCompanyMap.isEmpty()) {
-                validationCache.remove(campaignEntry.getKey());
-            }
         }
     }
     
@@ -419,11 +391,12 @@ public class UserCampaignRotationService {
      * Get all eligible campaigns for a company
      */
     private List<CampaignMapping> getEligibleCampaigns(String companyId, Date currentDate) {
-        // Get all campaigns for the company
+        log.info("Getting eligible campaigns for company {} on date {}", companyId, currentDate);
+        
+        // Get all campaign IDs associated with this company
         List<String> campaignIds = campaignCompanyService.getCampaignsForCompany(companyId);
         
-        // add log for campaignIds
-        log.info(String.format("Campaign IDs for company %s: %s", companyId, campaignIds));
+        log.info("Found {} campaign associations for company {}", campaignIds.size(), companyId);
         
         if (campaignIds.isEmpty()) {
             return new ArrayList<>();
@@ -432,35 +405,49 @@ public class UserCampaignRotationService {
         // Get campaign details
         List<CampaignMapping> campaigns = campaignRepository.findAllById(campaignIds);
         
-        log.info(String.format("Campaigns for company %s: Total campaigns: %d", companyId, campaigns.size()));
-        for (CampaignMapping campaign : campaigns) {
-            log.info(String.format("Campaign ID: %s, Name: %s, Status: %s, Start Date: %s, End Date: %s", 
-                    campaign.getId(), 
-                    campaign.getName(),
-                    campaign.getStatus(),
-                    campaign.getStartDate(),
-                    campaign.getEndDate()));
-        }
+        log.info("Retrieved {} campaign details for company {}", campaigns.size(), companyId);
         
-        // Filter campaigns based on date range and other criteria
-        return campaigns.stream()
+        // Filter campaigns based on eligibility criteria
+        List<CampaignMapping> eligibleCampaigns = campaigns.stream()
                 .filter(campaign -> isEligibleForRotation(campaign, currentDate))
                 .collect(Collectors.toList());
+        
+        log.info("Found {} eligible campaigns for company {} after filtering", 
+                eligibleCampaigns.size(), companyId);
+        
+        return eligibleCampaigns;
     }
     
     /**
      * Check if a campaign is eligible for rotation
      */
     private boolean isEligibleForRotation(CampaignMapping campaign, Date currentDate) {
-        // Check if campaign is active
-        if (!"In progress".equals(campaign.getStatus())) {
+        // Check if campaign status is active
+        String status = campaign.getStatus();
+        if (!"ACTIVE".equals(status) && !"INPROGRESS".equals(status) && !"SCHEDULED".equals(status)) {
+            log.debug("Campaign {} not eligible: status is {}", campaign.getId(), status);
             return false;
         }
         
-        // Check date range
-        return isWithinDateRange(campaign, currentDate);
+        // Check if campaign is within date range
+        if (!isWithinDateRange(campaign, currentDate)) {
+            log.debug("Campaign {} not eligible: outside date range", campaign.getId());
+            return false;
+        }
+        
+        // Check if campaign is completed
+        if ("COMPLETED".equals(campaign.getVisibility())) {
+            log.debug("Campaign {} not eligible: marked as completed", campaign.getId());
+            return false;
+        }
+        
+        log.debug("Campaign {} is eligible for rotation", campaign.getId());
+        return true;
     }
     
+    /**
+     * Check if current date is within campaign's date range
+     */
     private boolean isWithinDateRange(CampaignMapping campaign, Date date) {
         Date startDate = campaign.getStartDate();
         Date endDate = campaign.getEndDate();
@@ -471,86 +458,27 @@ public class UserCampaignRotationService {
         // If end date is null, assume no end constraint
         boolean beforeEnd = endDate == null || !date.after(endDate);
         
-        return afterStart && beforeEnd;
+        boolean withinRange = afterStart && beforeEnd;
+        
+        log.debug("Campaign {} date range check: start={}, end={}, current={}, withinRange={}", 
+                campaign.getId(), startDate, endDate, date, withinRange);
+        
+        return withinRange;
     }
     
     /**
-     * Apply a view for a user and return the updated tracker
+     * Legacy method: Get next eligible campaign without session management
+     * Kept for backward compatibility - delegates to session-based method
      */
-    private UserCampaignTracker applyUserView(
-        String userId, String companyId, String campaignId,
-        Date currentDate, Date weekStartDate) {
-    
-        // First, check if there's an existing tracker for this user-campaign combination
-        // regardless of the week
-        List<UserCampaignTracker> existingTrackers = userTrackerRepository
-                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
+    @Transactional
+    public CampaignResponseDTO getNextEligibleCampaignForUser(String requestDate, String companyId, String userId) 
+            throws DataHandlingException {
         
-        // Get the specific tracker for this week if it exists
-        UserCampaignTracker weeklyTracker = userTrackerRepository
-                .findByUserIdAndCompanyIdAndCampaignIdAndWeekStartDate(
-                        userId, companyId, campaignId, weekStartDate)
-                .orElse(null);
+        log.warn("Using legacy method getNextEligibleCampaignForUser - consider upgrading to session-based method");
         
-        // If no tracker exists for this week, create a new one
-        if (weeklyTracker == null) {
-            Optional<CampaignMapping> campaignOpt = campaignRepository.findById(campaignId);
-            if (!campaignOpt.isPresent()) {
-                throw new RuntimeException("Campaign not found: " + campaignId);
-            }
-            
-            CampaignMapping campaign = campaignOpt.get();
-            
-            // Create new tracker
-            weeklyTracker = new UserCampaignTracker();
-            weeklyTracker.setId(UUID.randomUUID().toString());
-            weeklyTracker.setUserId(userId);
-            weeklyTracker.setCompanyId(companyId);
-            weeklyTracker.setCampaignId(campaignId);
-            weeklyTracker.setWeekStartDate(weekStartDate);
-            
-            // Set weekly frequency from campaign
-            weeklyTracker.setRemainingWeeklyFrequency(campaign.getFrequencyPerWeek());
-            
-            // For display cap, check if there's an existing tracker for this campaign
-            if (!existingTrackers.isEmpty()) {
-                // If there's an existing tracker, use its remaining display cap
-                // Find the one with the most recent view date
-                UserCampaignTracker mostRecentTracker = existingTrackers.stream()
-                        .max(Comparator.comparing(
-                                tracker -> tracker.getLastViewDate() != null ? 
-                                        tracker.getLastViewDate() : new Date(0)))
-                        .orElse(null);
-                
-                if (mostRecentTracker != null) {
-                    // Use the remaining display cap from the most recent tracker
-                    weeklyTracker.setRemainingDisplayCap(mostRecentTracker.getRemainingDisplayCap());
-                    log.info(String.format("Using existing display cap for user %s, campaign %s: %d", 
-                            userId, campaignId, weeklyTracker.getRemainingDisplayCap()));
-                } else {
-                    // This shouldn't happen, but set to campaign default if it does
-                    weeklyTracker.setRemainingDisplayCap(campaign.getDisplayCapping());
-                    log.info(String.format("Using default display cap for user %s, campaign %s: %d", 
-                            userId, campaignId, weeklyTracker.getRemainingDisplayCap()));
-                }
-            } else {
-                // If there's no existing tracker, use the campaign's display cap
-                weeklyTracker.setRemainingDisplayCap(campaign.getDisplayCapping());
-                log.info(String.format("Setting initial display cap for user %s, campaign %s: %d", 
-                        userId, campaignId, weeklyTracker.getRemainingDisplayCap()));
-            }
-        }
-        
-        // Apply the view
-        weeklyTracker.setRemainingWeeklyFrequency(Math.max(0, weeklyTracker.getRemainingWeeklyFrequency() - 1));
-        weeklyTracker.setRemainingDisplayCap(Math.max(0, weeklyTracker.getRemainingDisplayCap() - 1));
-        weeklyTracker.setLastViewDate(currentDate);
-        
-        log.info(String.format("Applied view for user %s, campaign %s: weekly frequency=%d, display cap=%d", 
-                userId, campaignId, weeklyTracker.getRemainingWeeklyFrequency(), 
-                weeklyTracker.getRemainingDisplayCap()));
-        
-        // Save the tracker
-        return userTrackerRepository.save(weeklyTracker);
+        // For backward compatibility, we'll create a mock session or handle without session
+        // In practice, you should use the session-based method
+        throw new DataHandlingException(HttpStatus.BAD_REQUEST.toString(),
+                "Legacy method no longer supported. Please use session-based campaign rotation.");
     }
 }

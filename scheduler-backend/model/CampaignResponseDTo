@@ -19,4 +19,16 @@ public class CampaignResponseDTO {
     private String status; // DRAFT, SCHEDULED, ACTIVE, COMPLETED, CANCELLED, INPROGRESS
     private String visibility; // VISIBLE, COMPLETED
     private String campaignSteps; // MAP_INSIGHT, CAMPAIGN_DURATION, REVIEW, SUBMIT
+
+
+
+    
+     // Session-related fields
+     private Boolean alreadyViewedInSession;
+     private String sessionId;
+     
+     // NEW: Closure tracking fields
+     private Integer closureCount;         // How many times user closed this campaign
+     private String nextClosureAction;     // What will happen on next close: HIDE_UNTIL_NEXT_ELIGIBLE, ASK_SEE_AGAIN, ASK_STOP_ALL
+     
 }
