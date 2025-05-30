@@ -2,16 +2,19 @@ package com.usbank.corp.dcr.api.service;
 
 import com.usbank.corp.dcr.api.entity.CampaignMapping;
 import com.usbank.corp.dcr.api.entity.UserCampaignTracker;
+import com.usbank.corp.dcr.api.entity.UserInsightClosure;
 import com.usbank.corp.dcr.api.exception.DataHandlingException;
 import com.usbank.corp.dcr.api.model.CampaignResponseDTO;
 import com.usbank.corp.dcr.api.model.EnrolledUserDTO;
 import com.usbank.corp.dcr.api.model.UserDTO;
 import com.usbank.corp.dcr.api.repository.CampaignRepository;
 import com.usbank.corp.dcr.api.repository.UserCampaignTrackerRepository;
+import com.usbank.corp.dcr.api.repository.UserInsightClosureRepository;
 import com.usbank.corp.dcr.api.util.RotationUtils;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +44,12 @@ public class UserCampaignRotationService {
 
     @Autowired
     private CampaignCompanyService campaignCompanyService;
+    
+    @Autowired
+    private UserInsightClosureService insightClosureService;
+    
+    @Autowired
+    private UserInsightClosureRepository closureRepository;
 
     // Simple two-level cache implementation
     // Map of campaignId -> Map of (userId:companyId -> timestamp)
@@ -51,12 +60,19 @@ public class UserCampaignRotationService {
 
     /**
      * Get the next eligible campaign for a user based on rotation rules.
-     * This version enforces one campaign per week rule.
+     * This version enforces one campaign per week rule and respects closure preferences.
      */
     @Transactional
     public CampaignResponseDTO getNextEligibleCampaignForUser(String requestDate, String companyId, String userId) 
             throws DataHandlingException {
         try {
+            // First check if user has globally opted out
+            if (insightClosureService.isUserGloballyOptedOut(userId)) {
+                log.info("User {} has globally opted out of all insights", userId);
+                throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(),
+                        "User has opted out of all insights");
+            }
+            
             // Convert date format
             String formattedDate = rotationUtils.convertDate(requestDate);
             Date currentDate = rotationUtils.getinDate(formattedDate);
@@ -76,9 +92,25 @@ public class UserCampaignRotationService {
                         "No eligible campaigns found for the company on the requested date");
             }
             
-            // Validate that the user belongs to the company for at least one of the eligible campaigns
+            // Get closed campaign IDs for this user
+            List<String> closedCampaignIds = insightClosureService.getClosedCampaignIds(userId, companyId);
+            log.info("User {} has {} closed campaigns", userId, closedCampaignIds.size());
+            
+            // Filter out closed campaigns from eligible campaigns
+            List<CampaignMapping> availableCampaigns = eligibleCampaigns.stream()
+                    .filter(campaign -> !closedCampaignIds.contains(campaign.getId()))
+                    .collect(Collectors.toList());
+            
+            if (availableCampaigns.isEmpty()) {
+                log.info("No available campaigns after filtering closures for user {} in company {}", 
+                        userId, companyId);
+                throw new DataHandlingException(HttpStatus.OK.toString(),
+                        "No eligible campaigns available at this time");
+            }
+            
+            // Validate that the user belongs to the company for at least one of the available campaigns
             boolean validatedForAnyCampaign = false;
-            for (CampaignMapping campaign : eligibleCampaigns) {
+            for (CampaignMapping campaign : availableCampaigns) {
                 if (validateUserBelongsToCompany(userId, companyId, campaign.getId())) {
                     validatedForAnyCampaign = true;
                     break;
@@ -86,7 +118,8 @@ public class UserCampaignRotationService {
             }
             
             if (!validatedForAnyCampaign) {
-                log.warn(String.format("User {} is not enrolled in any eligible campaigns for company {}", userId, companyId));
+                log.warn(String.format("User {} is not enrolled in any available campaigns for company {}", 
+                        userId, companyId));
                 throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(),
                         "User is not enrolled in any eligible campaigns for this company");
             }
@@ -97,13 +130,18 @@ public class UserCampaignRotationService {
             
             if (!weeklyTrackers.isEmpty()) {
                 // User already has a campaign assigned for this week
-                
-                // Find the campaign assigned for this week (should be only one due to one-campaign-per-week rule)
                 UserCampaignTracker weeklyTracker = weeklyTrackers.get(0);
+                
+                // Check if this campaign is closed for the user
+                if (insightClosureService.isCampaignClosedForUser(userId, companyId, weeklyTracker.getCampaignId())) {
+                    log.info("User's weekly campaign {} is closed. No more campaigns this week.", 
+                            weeklyTracker.getCampaignId());
+                    throw new DataHandlingException(HttpStatus.OK.toString(),
+                            "Your assigned campaign for this week is currently closed");
+                }
                 
                 // Check if this campaign has remaining weekly frequency
                 if (weeklyTracker.getRemainingWeeklyFrequency() <= 0) {
-                    // Weekly frequency exhausted, no more views for this week
                     log.info(String.format("User %s has exhausted weekly frequency for campaign %s", 
                             userId, weeklyTracker.getCampaignId()));
                     throw new DataHandlingException(HttpStatus.OK.toString(),
@@ -112,7 +150,6 @@ public class UserCampaignRotationService {
                 
                 // Check if this campaign has remaining display cap
                 if (weeklyTracker.getRemainingDisplayCap() <= 0) {
-                    // Display cap exhausted, no more views of this campaign ever
                     log.info(String.format("User %s has exhausted display cap for campaign %s", 
                             userId, weeklyTracker.getCampaignId()));
                     throw new DataHandlingException(HttpStatus.OK.toString(),
@@ -131,8 +168,6 @@ public class UserCampaignRotationService {
                 // Verify user is still enrolled in this campaign
                 if (!validateUserBelongsToCompany(userId, companyId, campaign.getId())) {
                     log.warn(String.format("User %s is no longer enrolled in campaign %s", userId, campaign.getId()));
-                    // Since we enforce one campaign per week, and the user is no longer enrolled in their 
-                    // assigned campaign, they can't see any campaigns this week
                     throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(),
                             "User is no longer enrolled in the assigned campaign for this week");
                 }
@@ -153,14 +188,23 @@ public class UserCampaignRotationService {
                 response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
                 response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
                 
+                // Check if this campaign was previously closed
+                Optional<UserInsightClosure> previousClosure = closureRepository
+                        .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaign.getId());
+                
+                if (previousClosure.isPresent() && previousClosure.get().getClosureCount() > 0) {
+                    response.setPreviouslyClosed(true);
+                    response.setPreviousClosureCount(previousClosure.get().getClosureCount());
+                }
+                
                 return response;
             }
             
             // If we get here, the user doesn't have a campaign assigned for this week yet
             // We need to select the next campaign in rotation
             
-            // Find all campaigns the user is enrolled in
-            List<CampaignMapping> enrolledCampaigns = eligibleCampaigns.stream()
+            // Find all campaigns the user is enrolled in (from available campaigns)
+            List<CampaignMapping> enrolledCampaigns = availableCampaigns.stream()
                     .filter(campaign -> validateUserBelongsToCompany(userId, companyId, campaign.getId()))
                     .collect(Collectors.toList());
             
@@ -173,8 +217,9 @@ public class UserCampaignRotationService {
             // Get the last campaign assigned to this user (from any previous week)
             CampaignMapping lastAssignedCampaign = getLastAssignedCampaign(userId, companyId);
             
-            // Get the next campaign in rotation
-            CampaignMapping nextCampaign = getNextCampaignInRotation(lastAssignedCampaign, enrolledCampaigns);
+            // Get the next campaign in rotation (considering closures)
+            CampaignMapping nextCampaign = getNextCampaignInRotation(
+                    lastAssignedCampaign, enrolledCampaigns, userId, companyId);
             
             if (nextCampaign == null) {
                 log.info(String.format("No next campaign available for user %s in company %s", userId, companyId));
@@ -193,6 +238,16 @@ public class UserCampaignRotationService {
             CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(nextCampaign);
             response.setDisplayCapping(updatedTracker.getRemainingDisplayCap());
             response.setFrequencyPerWeek(updatedTracker.getRemainingWeeklyFrequency());
+            
+            // Check if this campaign was previously closed
+            Optional<UserInsightClosure> previousClosure = closureRepository
+                    .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, nextCampaign.getId());
+            
+            if (previousClosure.isPresent() && previousClosure.get().getClosureCount() > 0) {
+                response.setPreviouslyClosed(true);
+                response.setPreviousClosureCount(previousClosure.get().getClosureCount());
+                response.setNextEligibleDate(previousClosure.get().getNextEligibleDate());
+            }
             
             return response;
             
@@ -239,22 +294,31 @@ public class UserCampaignRotationService {
     }
     
     /**
-     * Get the next campaign in rotation
+     * Get the next campaign in rotation, considering closures
      */
     private CampaignMapping getNextCampaignInRotation(
             CampaignMapping lastCampaign, 
-            List<CampaignMapping> eligibleCampaigns) {
+            List<CampaignMapping> eligibleCampaigns,
+            String userId,
+            String companyId) {
         
         if (eligibleCampaigns.isEmpty()) {
             return null;
         }
         
-        // If this is the first campaign for the user, return the first eligible one
+        // Get closed campaign IDs
+        List<String> closedCampaignIds = insightClosureService.getClosedCampaignIds(userId, companyId);
+        
+        // If this is the first campaign for the user
         if (lastCampaign == null) {
-            return eligibleCampaigns.get(0);
+            // Find first non-closed campaign
+            return eligibleCampaigns.stream()
+                    .filter(c -> !closedCampaignIds.contains(c.getId()))
+                    .findFirst()
+                    .orElse(null);
         }
         
-        // Find last campaign's position in eligible campaigns
+        // Find last campaign's position
         int lastIndex = -1;
         for (int i = 0; i < eligibleCampaigns.size(); i++) {
             if (eligibleCampaigns.get(i).getId().equals(lastCampaign.getId())) {
@@ -263,14 +327,31 @@ public class UserCampaignRotationService {
             }
         }
         
-        // If not found (campaign no longer eligible), start from beginning
+        // If not found, start from beginning
         if (lastIndex == -1) {
-            return eligibleCampaigns.get(0);
+            lastIndex = -1;
         }
         
-        // Get the next campaign in rotation
-        int nextIndex = (lastIndex + 1) % eligibleCampaigns.size();
-        return eligibleCampaigns.get(nextIndex);
+        // Find next non-closed campaign in rotation
+        int attempts = 0;
+        int nextIndex = lastIndex;
+        
+        while (attempts < eligibleCampaigns.size()) {
+            nextIndex = (nextIndex + 1) % eligibleCampaigns.size();
+            CampaignMapping candidate = eligibleCampaigns.get(nextIndex);
+            
+            if (!closedCampaignIds.contains(candidate.getId())) {
+                // Double-check if this campaign is really available
+                if (!insightClosureService.isCampaignClosedForUser(userId, companyId, candidate.getId())) {
+                    return candidate;
+                }
+            }
+            
+            attempts++;
+        }
+        
+        // No eligible campaigns found
+        return null;
     }
     
     /**
@@ -280,7 +361,6 @@ public class UserCampaignRotationService {
     private boolean validateUserBelongsToCompany(String userId, String companyId, String campaignId) {
         String userCompanyKey = userId + ":" + companyId;
         
-        // Give us log of this
         log.info(String.format("Validating user-company relationship for campaign %s: userId=%s, companyId=%s", 
                 campaignId, userId, companyId));
         
@@ -300,8 +380,8 @@ public class UserCampaignRotationService {
             // Cache miss or expired, check with service
             EnrolledUserDTO enrolledUsersDTO = rmManageCampaignService.getEnrolledUsers(campaignId);
             log.info(String.format("Checking if user-company pair exists in enrolled users DTO: %s", enrolledUsersDTO));
+            
             // Check if the user-company pair exists in the enrolled users
-            // We need to check the usersList field in enrolledUsersDTO
             boolean userCompanyFound = false;
             if (enrolledUsersDTO != null && enrolledUsersDTO.getUsersList() != null) {
                 log.info(String.format("Enrolled users list is not null. Iterating through the list."));
@@ -422,7 +502,6 @@ public class UserCampaignRotationService {
         // Get all campaigns for the company
         List<String> campaignIds = campaignCompanyService.getCampaignsForCompany(companyId);
         
-        // add log for campaignIds
         log.info(String.format("Campaign IDs for company %s: %s", companyId, campaignIds));
         
         if (campaignIds.isEmpty()) {

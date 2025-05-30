@@ -19,4 +19,11 @@ public class CampaignResponseDTO {
     private String status; // DRAFT, SCHEDULED, ACTIVE, COMPLETED, CANCELLED, INPROGRESS
     private String visibility; // VISIBLE, COMPLETED
     private String campaignSteps; // MAP_INSIGHT, CAMPAIGN_DURATION, REVIEW, SUBMIT
+
+
+        // New fields for closure tracking
+        private Boolean previouslyClosed;
+        private Integer previousClosureCount;
+        private Boolean requiresClosurePrompt;
+        private Date nextEligibleDate;
 }

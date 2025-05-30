@@ -1,0 +1,58 @@
+-- Create user_insight_closure table
+CREATE TABLE user_insight_closure (
+    id VARCHAR(255) PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL,
+    company_id VARCHAR(255) NOT NULL,
+    campaign_id VARCHAR(255) NOT NULL,
+    closure_count INT NOT NULL DEFAULT 0,
+    permanently_closed BIT NOT NULL DEFAULT 0,
+    closure_reason NVARCHAR(1000),
+    first_closure_date DATETIME,
+    last_closure_date DATETIME,
+    next_eligible_date DATETIME,
+    opt_out_all_insights BIT NOT NULL DEFAULT 0,
+    created_date DATETIME NOT NULL DEFAULT GETDATE(),
+    updated_date DATETIME,
+    CONSTRAINT UK_user_company_campaign UNIQUE (user_id, company_id, campaign_id)
+);
+
+-- Create indexes for performance
+CREATE INDEX IX_user_insight_closure_user_company ON user_insight_closure(user_id, company_id);
+CREATE INDEX IX_user_insight_closure_campaign ON user_insight_closure(campaign_id);
+CREATE INDEX IX_user_insight_closure_next_eligible ON user_insight_closure(next_eligible_date);
+CREATE INDEX IX_user_insight_closure_opt_out ON user_insight_closure(opt_out_all_insights);
+
+-- Create user_global_preference table
+CREATE TABLE user_global_preference (
+    id VARCHAR(255) PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL UNIQUE,
+    insights_enabled BIT NOT NULL DEFAULT 1,
+    opt_out_date DATETIME,
+    opt_out_reason NVARCHAR(1000),
+    created_date DATETIME NOT NULL DEFAULT GETDATE(),
+    updated_date DATETIME
+);
+
+-- Create index for user lookup
+CREATE INDEX IX_user_global_preference_user ON user_global_preference(user_id);
+
+-- Update existing user_campaign_tracker table (add closure tracking fields)
+ALTER TABLE user_campaign_tracker ADD has_closed_insight BIT DEFAULT 0;
+ALTER TABLE user_campaign_tracker ADD closure_count INT DEFAULT 0;
+ALTER TABLE user_campaign_tracker ADD temporarily_closed BIT DEFAULT 0;
+ALTER TABLE user_campaign_tracker ADD closed_until_date DATETIME;
+
+-- Create audit table for tracking closure events (optional)
+CREATE TABLE user_insight_closure_audit (
+    id VARCHAR(255) PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL,
+    company_id VARCHAR(255) NOT NULL,
+    campaign_id VARCHAR(255) NOT NULL,
+    action VARCHAR(50) NOT NULL, -- CLOSED, PREFERENCE_SET, OPTED_OUT
+    action_details NVARCHAR(500),
+    created_date DATETIME NOT NULL DEFAULT GETDATE()
+);
+
+CREATE INDEX IX_closure_audit_user ON user_insight_closure_audit(user_id);
+CREATE INDEX IX_closure_audit_campaign ON user_insight_closure_audit(campaign_id);
+CREATE INDEX IX_closure_audit_date ON user_insight_closure_audit(created_date);
