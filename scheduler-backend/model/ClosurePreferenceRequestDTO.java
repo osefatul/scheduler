@@ -19,4 +19,7 @@ public class ClosurePreferenceRequestDTO {
     private Boolean wantsToSeeAgain;
     
     private String reason; // Free text reason from frontend
+
+    // NEW: Optional date parameter for testing
+    private String preferenceDate; // Format: yyyy-MM-dd or yyyyMMdd
 }

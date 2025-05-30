@@ -11,4 +11,6 @@ public class InsightClosureResponseDTO {
     private String message;
     private boolean requiresUserInput;
     private boolean previouslyClosed;
+    private Date effectiveDate; // NEW: Show what date was used
+    private Date nextEligibleDate; // NEW: Show when user can see again
 }

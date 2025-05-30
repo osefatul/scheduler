@@ -16,4 +16,7 @@ public class InsightClosureRequestDTO {
     private String campaignId;
     
     private String action; // CLOSE, RESPOND_TO_PROMPT, GLOBAL_OPTOUT
+
+    // NEW: Optional date parameter for testing
+    private String closureDate; // Format: yyyy-MM-dd or yyyyMMdd
 }

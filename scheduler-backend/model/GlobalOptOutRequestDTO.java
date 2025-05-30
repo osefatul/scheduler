@@ -13,4 +13,7 @@ public class GlobalOptOutRequestDTO {
     private Boolean optOut;
     
     private String reason; // Free text reason from frontend
+
+    // NEW: Optional date parameter for testing
+    private String optOutDate; // Format: yyyy-MM-dd or yyyyMMdd
 }
