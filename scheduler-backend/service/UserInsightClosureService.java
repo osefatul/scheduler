@@ -211,6 +211,10 @@ public class UserInsightClosureService {
     }
 
     // Update checkForGlobalOptOutPattern to accept date
+    private void checkForGlobalOptOutPattern(String userId, String companyId) {
+        checkForGlobalOptOutPattern(userId, companyId, new Date());
+    }
+
     private void checkForGlobalOptOutPattern(String userId, String companyId, Date effectiveDate) {
         List<UserInsightClosure> closures = closureRepository
                 .findByUserIdAndCompanyId(userId, companyId);
@@ -225,10 +229,11 @@ public class UserInsightClosureService {
         }
     }
 
-    /**
-     * Check if a campaign is currently closed for a user
-     */
     public boolean isCampaignClosedForUser(String userId, String companyId, String campaignId) {
+        return isCampaignClosedForUser(userId, companyId, campaignId, new Date());
+    }
+
+    public boolean isCampaignClosedForUser(String userId, String companyId, String campaignId, Date checkDate) {
         Optional<UserInsightClosure> closureOpt = closureRepository
                 .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
 
@@ -238,46 +243,95 @@ public class UserInsightClosureService {
 
         UserInsightClosure closure = closureOpt.get();
 
+        log.debug("Checking closure for user {} campaign {} at date {}: count={}, permanent={}, nextEligible={}",
+                userId, campaignId, checkDate,
+                closure.getClosureCount(),
+                closure.getPermanentlyClosed(),
+                closure.getNextEligibleDate());
+
+        // CRITICAL FIX FOR ISSUE 3: If closure count is 0, user should be eligible
+        // regardless of other fields
+        if (closure.getClosureCount() == 0) {
+            log.info("Closure count is 0 for user {} campaign {} - allowing access regardless of other flags", userId,
+                    campaignId);
+            return false;
+        }
+
         // Check if permanently closed
         if (closure.getPermanentlyClosed()) {
+            log.debug("Campaign {} permanently closed for user {}", campaignId, userId);
             return true;
         }
 
-        // Check if in wait period
+        // Check if in wait period (only if closureCount > 0)
         if (closure.getNextEligibleDate() != null &&
-                closure.getNextEligibleDate().after(new Date())) {
+                closure.getNextEligibleDate().after(checkDate)) {
+            log.info("Campaign {} in wait period until {} for user {} (checking at {})",
+                    campaignId, closure.getNextEligibleDate(), userId, checkDate);
             return true;
         }
 
-        // Check if temporarily closed (first closure)
+        // For first closure, check if they've seen other campaigns since
         if (closure.getClosureCount() == 1 && closure.getLastClosureDate() != null) {
-            // This is hidden until next normal eligibility
-            // The rotation service will handle this
-            return true;
+            boolean hasViewedOthers = hasViewedOtherCampaignsSince(closure.getUserId(),
+                    closure.getCompanyId(), closure.getCampaignId(),
+                    closure.getLastClosureDate(), checkDate);
+
+            log.debug("First closure check for user {} campaign {}: hasViewedOthers={}",
+                    userId, campaignId, hasViewedOthers);
+            return !hasViewedOthers;
         }
 
         return false;
     }
 
-    /**
-     * Get all closed campaigns for a user
-     */
     public List<String> getClosedCampaignIds(String userId, String companyId) {
+        return getClosedCampaignIds(userId, companyId, new Date());
+    }
+
+    public List<String> getClosedCampaignIds(String userId, String companyId, Date checkDate) {
         List<UserInsightClosure> closures = closureRepository
                 .findByUserIdAndCompanyId(userId, companyId);
 
         List<String> closedCampaignIds = new ArrayList<>();
-        Date now = new Date();
 
         for (UserInsightClosure closure : closures) {
-            if (closure.getPermanentlyClosed() ||
-                    (closure.getNextEligibleDate() != null && closure.getNextEligibleDate().after(now)) ||
-                    (closure.getClosureCount() > 0 && !isEligibleAfterClosure(closure))) {
+            if (isCampaignClosedBasedOnClosure(closure, checkDate)) {
                 closedCampaignIds.add(closure.getCampaignId());
             }
         }
 
+        log.debug("Found {} closed campaigns for user {} at date {}: {}",
+                closedCampaignIds.size(), userId, checkDate, closedCampaignIds);
+
         return closedCampaignIds;
+    }
+
+    private boolean isCampaignClosedBasedOnClosure(UserInsightClosure closure, Date checkDate) {
+        // CRITICAL: If closure count is 0, not closed
+        if (closure.getClosureCount() == 0) {
+            return false;
+        }
+
+        // Check permanent closure
+        if (closure.getPermanentlyClosed()) {
+            return true;
+        }
+
+        // Check wait period
+        if (closure.getNextEligibleDate() != null &&
+                closure.getNextEligibleDate().after(checkDate)) {
+            return true;
+        }
+
+        // For first closure, check if eligible after other campaigns
+        if (closure.getClosureCount() == 1 && closure.getLastClosureDate() != null) {
+            return !hasViewedOtherCampaignsSince(closure.getUserId(),
+                    closure.getCompanyId(), closure.getCampaignId(),
+                    closure.getLastClosureDate(), checkDate);
+        }
+
+        return false;
     }
 
     /**
@@ -295,33 +349,50 @@ public class UserInsightClosureService {
         return true;
     }
 
-    /**
-     * Check if user has viewed other campaigns since a date
-     */
+    // Update hasViewedOtherCampaignsSince to accept check date
     private boolean hasViewedOtherCampaignsSince(String userId, String companyId,
             String excludeCampaignId, Date sinceDate) {
+        return hasViewedOtherCampaignsSince(userId, companyId, excludeCampaignId, sinceDate, new Date());
+    }
+
+    private boolean hasViewedOtherCampaignsSince(String userId, String companyId,
+            String excludeCampaignId, Date sinceDate, Date checkDate) {
         List<UserCampaignTracker> trackers = userTrackerRepository
                 .findRecentByUserIdAndCompanyId(userId, companyId);
 
         return trackers.stream()
                 .anyMatch(t -> !t.getCampaignId().equals(excludeCampaignId) &&
                         t.getLastViewDate() != null &&
-                        t.getLastViewDate().after(sinceDate));
+                        t.getLastViewDate().after(sinceDate) &&
+                        !t.getLastViewDate().after(checkDate)); // Don't count future views
     }
 
-    /**
-     * Check if user has globally opted out
-     */
     public boolean isUserGloballyOptedOut(String userId) {
+        return isUserGloballyOptedOut(userId, new Date());
+    }
+
+    public boolean isUserGloballyOptedOut(String userId, Date checkDate) {
         Optional<UserGlobalPreference> prefOpt = globalPreferenceRepository
                 .findByUserId(userId);
 
         if (prefOpt.isPresent()) {
-            return !prefOpt.get().getInsightsEnabled();
+            UserGlobalPreference pref = prefOpt.get();
+            // If opt-out date is set and is before or equal to check date, user is opted
+            // out
+            if (!pref.getInsightsEnabled() &&
+                    (pref.getOptOutDate() == null || !pref.getOptOutDate().after(checkDate))) {
+                log.debug("User {} globally opted out at date {} (opt-out date: {})",
+                        userId, checkDate, pref.getOptOutDate());
+                return true;
+            }
         }
 
         // Also check if any closure record has global opt-out
-        return closureRepository.hasUserOptedOutGlobally(userId);
+        boolean hasGlobalOptOut = closureRepository.hasUserOptedOutGlobally(userId);
+        if (hasGlobalOptOut) {
+            log.debug("User {} has global opt-out flag in closure records", userId);
+        }
+        return hasGlobalOptOut;
     }
 
     /**
