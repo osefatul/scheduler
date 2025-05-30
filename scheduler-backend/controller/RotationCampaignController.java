@@ -31,47 +31,89 @@ import service.UserSessionService;
 * IMPORTANT: This already filters out campaigns user shouldn't see based on closure history
 */
 @RequestMapping(method = RequestMethod.GET, value = "/next")
-public ResponseEntity<CampaignResponseDTO> getNextEligibleCampaign(
-       @RequestParam("date") String date,
-       @RequestParam("company") String company,
-       @RequestParam("userId") String userId,
-       HttpSession session) throws DataHandlingException {
-   
-   log.info("Getting next eligible campaign for user {} in company {}", userId, company);
-   
-   try {
-       // The rotation service already checks isUserEligibleForCampaign() 
-       // which considers closure history, so if we get here, user should see the campaign
-       CampaignResponseDTO campaign = rotationService.getNextEligibleCampaignWithSession(
-               date, company, userId, session);
-       
-       // Mark as viewed in session if not already
-       boolean alreadyViewedInSession = sessionService.hasCampaignBeenViewedInSession(
-               session, userId, company, campaign.getId());
-       
-       if (!alreadyViewedInSession) {
-           sessionService.markCampaignViewedInSession(session, userId, company, campaign.getId());
-       }
-       
-       // Add interaction info to response
-       UserInsightPreferenceService.CampaignInteractionInfo interactionInfo = 
-               preferenceService.getCampaignInteractionInfo(userId, company, campaign.getId());
-       
-       campaign.setAlreadyViewedInSession(alreadyViewedInSession);
-       campaign.setSessionId(session.getId());
-       campaign.setClosureCount(interactionInfo.getClosureCount());
-       campaign.setNextClosureAction(interactionInfo.getNextClosureAction());
-       
-       return ResponseEntity.ok(campaign);
-       
-   } catch (DataHandlingException e) {
-       throw e;
-   } catch (Exception e) {
-       log.error("Unexpected error getting campaign for user {}: {}", userId, e.getMessage(), e);
-       throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
-               "Unexpected error: " + e.getMessage());
-   }
-}
+    public ResponseEntity<CampaignResponseDTO> getNextEligibleCampaign(
+            @RequestParam("date") String date,
+            @RequestParam("company") String company,
+            @RequestParam("userId") String userId,
+            HttpSession session) throws DataHandlingException {
+        
+        log.info("=== GET /next called ===");
+        log.info("User: {}, Company: {}, Date: {}, Session: {}", userId, company, date, session.getId());
+        
+        try {
+            // 1. Check user preferences
+            if (!preferenceService.isUserEligibleForCampaigns(userId, company)) {
+                String reason = preferenceService.getUserPreferenceSummary(userId, company);
+                log.info("User {} not eligible: {}", userId, reason);
+                throw new DataHandlingException(HttpStatus.OK.toString(), reason);
+            }
+            
+            // 2. Get campaign (this will apply DB changes immediately on first view)
+            CampaignResponseDTO campaign = rotationService.getNextEligibleCampaignWithSession(
+                    date, company, userId, session);
+            
+            log.info("=== RESPONSE ===");
+            log.info("Campaign: {}", campaign.getId());
+            log.info("DisplayCapping: {}", campaign.getDisplayCapping());
+            log.info("FrequencyPerWeek: {}", campaign.getFrequencyPerWeek());
+            log.info("AlreadyViewedInSession: {}", campaign.getAlreadyViewedInSession());
+            log.info("SessionId: {}", campaign.getSessionId());
+            
+            return ResponseEntity.ok(campaign);
+            
+        } catch (DataHandlingException e) {
+            log.error("DataHandlingException: {}", e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("Unexpected error: {}", e.getMessage(), e);
+            throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
+                    "Unexpected error: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * CORRECTED: End session - only cleanup session trackers
+     */
+    @RequestMapping(method = RequestMethod.POST, value = "/end-session")
+    public ResponseEntity<String> endSession(HttpSession session) {
+        log.info("=== POST /end-session called ===");
+        log.info("Session: {}", session.getId());
+        
+        try {
+            sessionService.endSession(session);
+            
+            // Also invalidate the HTTP session
+            session.invalidate();
+            
+            log.info("Session ended and invalidated successfully");
+            return ResponseEntity.ok("Session ended successfully - session trackers cleaned up");
+            
+        } catch (Exception e) {
+            log.error("Error ending session: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error ending session: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Debug endpoint to check database state
+     */
+    @RequestMapping(method = RequestMethod.GET, value = "/debug-tracker")
+    public ResponseEntity<String> debugTracker(
+            @RequestParam("userId") String userId,
+            @RequestParam("company") String companyId,
+            @RequestParam("campaignId") String campaignId) {
+        
+        try {
+            // This would require injecting UserCampaignTrackerRepository
+            // For now, just return session info
+            return ResponseEntity.ok("Check logs for tracker information");
+            
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error: " + e.getMessage());
+        }
+    }
 
 /**
 * Handle user closing an insight - THIS IS WHERE THE MAGIC HAPPENS
@@ -184,17 +226,6 @@ public ResponseEntity<UserInsightPreferenceService.CampaignInteractionInfo> getC
         error.setMessage(message);
         return error;
     }
-
-/**
- * End user session manually
- * 
- * USAGE: Call this when user explicitly logs out or when you want to force
- * session end
- * - This will apply all pending session views to the database
- * - Reduces frequencyPerWeek and displayCapping by 1 for each campaign viewed
- * in session
- */
-@RequestMapping(method=RequestMethod.POST,value="/end-session")public ResponseEntity<String>endSession(HttpSession session){try{sessionService.endSession(session);return ResponseEntity.ok("Session ended successfully - views applied to database");}catch(Exception e){log.error("Error ending session: {}",e.getMessage(),e);return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error ending session");}}
 
 /**
  * Get session statistics
