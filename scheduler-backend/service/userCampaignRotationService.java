@@ -68,12 +68,12 @@ public class UserCampaignRotationService {
             Date currentDate = rotationUtils.getinDate(formattedDate);
             Date weekStartDate = rotationUtils.getWeekStartDate(currentDate);
             
-            log.info("Processing request for user {} in company {} on date {}", 
-                    userId, companyId, currentDate);
+            log.info("=== PROCESSING REQUEST ===");
+            log.info("User: {}, Company: {}, Date: {}, Session: {}", userId, companyId, currentDate, session.getId());
+            log.info("Week start date: {}", weekStartDate);
             
-            // 1. Get eligible campaigns and do all the filtering
+            // 1. Get eligible campaigns
             List<CampaignMapping> eligibleCampaigns = getEligibleCampaigns(companyId, currentDate);
-            
             if (eligibleCampaigns.isEmpty()) {
                 throw new DataHandlingException(HttpStatus.OK.toString(),
                         "No eligible campaigns found for the company on the requested date");
@@ -89,7 +89,9 @@ public class UserCampaignRotationService {
                         "No eligible campaigns found for this user");
             }
             
-            // 2. Get or create weekly tracker
+            log.info("Found {} eligible campaigns for user", userEligibleCampaigns.size());
+            
+            // 2. Check for existing weekly tracker
             List<UserCampaignTracker> weeklyTrackers = userTrackerRepository
                     .findByUserIdAndCompanyIdAndWeekStartDate(userId, companyId, weekStartDate);
             
@@ -97,8 +99,13 @@ public class UserCampaignRotationService {
             UserCampaignTracker tracker;
             
             if (!weeklyTrackers.isEmpty()) {
-                // User has existing campaign for this week
+                log.info("Found existing weekly tracker for user {} week {}", userId, weekStartDate);
+                
                 UserCampaignTracker weeklyTracker = weeklyTrackers.get(0);
+                log.info("Existing tracker - Campaign: {}, WeeklyFreq: {}, DisplayCap: {}", 
+                        weeklyTracker.getCampaignId(), 
+                        weeklyTracker.getRemainingWeeklyFrequency(), 
+                        weeklyTracker.getRemainingDisplayCap());
                 
                 Optional<CampaignMapping> campaignOpt = campaignRepository.findById(weeklyTracker.getCampaignId());
                 if (!campaignOpt.isPresent() || 
@@ -112,7 +119,9 @@ public class UserCampaignRotationService {
                 tracker = weeklyTracker;
                 
             } else {
-                // New week - assign next campaign in rotation
+                log.info("No existing weekly tracker - creating new assignment for user {} week {}", userId, weekStartDate);
+                
+                // Get next campaign in rotation
                 CampaignMapping lastAssignedCampaign = getLastAssignedCampaign(userId, companyId);
                 selectedCampaign = getNextCampaignInRotation(lastAssignedCampaign, userEligibleCampaigns);
                 
@@ -121,46 +130,69 @@ public class UserCampaignRotationService {
                             "No available campaigns for rotation");
                 }
                 
-                tracker = createTrackerForWeek(userId, companyId, selectedCampaign.getId(), 
-                        currentDate, weekStartDate);
+                log.info("Selected campaign for new week: {} ({})", selectedCampaign.getName(), selectedCampaign.getId());
+                
+                // Create new tracker with proper initial values
+                tracker = createTrackerForWeek(userId, companyId, selectedCampaign, weekStartDate);
+                
+                log.info("Created new tracker - WeeklyFreq: {}, DisplayCap: {}", 
+                        tracker.getRemainingWeeklyFrequency(), tracker.getRemainingDisplayCap());
             }
             
-            // 3. CORRECTED LOGIC: Check session and apply view immediately if needed
+            // 3. Handle session tracking and DB updates
             boolean alreadyViewedInSession = sessionService.hasCampaignBeenViewedInSession(
                     session, userId, companyId, selectedCampaign.getId());
             
+            log.info("Campaign {} already viewed in session {}: {}", selectedCampaign.getId(), session.getId(), alreadyViewedInSession);
+            
             if (!alreadyViewedInSession) {
-                // First time viewing in this session - apply view to DB immediately
+                log.info("First view in session - applying DB update");
+                
+                // Check if tracker has remaining capacity
+                if (tracker.getRemainingWeeklyFrequency() <= 0) {
+                    throw new DataHandlingException(HttpStatus.OK.toString(),
+                            "No more weekly views available for this campaign");
+                }
+                
+                if (tracker.getRemainingDisplayCap() <= 0) {
+                    throw new DataHandlingException(HttpStatus.OK.toString(),
+                            "Campaign has reached its display cap limit");
+                }
+                
+                // Apply view to session and DB
                 boolean isNewView = sessionService.markCampaignViewedInSession(
                         session, userId, companyId, selectedCampaign.getId());
                 
                 if (isNewView) {
-                    log.info("Applied first view in session {} for user {} campaign {}", 
-                            session.getId(), userId, selectedCampaign.getId());
+                    log.info("Applied view to DB for user {} campaign {}", userId, selectedCampaign.getId());
                     
-                    // REFRESH tracker to get updated values from database
+                    // Refresh tracker to get updated values
                     Optional<UserCampaignTracker> updatedTrackerOpt = userTrackerRepository
                             .findByUserIdAndCompanyIdAndCampaignIdAndWeekStartDate(
                                     userId, companyId, selectedCampaign.getId(), weekStartDate);
                     
                     if (updatedTrackerOpt.isPresent()) {
                         tracker = updatedTrackerOpt.get();
-                        log.info("Refreshed tracker - weeklyFreq: {}, displayCap: {}", 
+                        log.info("Refreshed tracker after DB update - WeeklyFreq: {}, DisplayCap: {}", 
                                 tracker.getRemainingWeeklyFrequency(), tracker.getRemainingDisplayCap());
                     }
                 }
+            } else {
+                log.info("Already viewed in session - returning current tracker values");
             }
             
-            // 4. Prepare response with CURRENT database values
+            // 4. Prepare response
             CampaignResponseDTO response = campaignService.mapToDTOWithCompanies(selectedCampaign);
             response.setDisplayCapping(tracker.getRemainingDisplayCap());
             response.setFrequencyPerWeek(tracker.getRemainingWeeklyFrequency());
             response.setAlreadyViewedInSession(alreadyViewedInSession);
             response.setSessionId(session.getId());
             
-            log.info("Returning campaign {} with displayCap: {}, weeklyFreq: {}, viewedInSession: {}", 
-                    selectedCampaign.getId(), tracker.getRemainingDisplayCap(), 
-                    tracker.getRemainingWeeklyFrequency(), alreadyViewedInSession);
+            log.info("=== FINAL RESPONSE ===");
+            log.info("Campaign: {} ({})", response.getName(), response.getId());
+            log.info("DisplayCapping: {}", response.getDisplayCapping());
+            log.info("FrequencyPerWeek: {}", response.getFrequencyPerWeek());
+            log.info("AlreadyViewedInSession: {}", response.getAlreadyViewedInSession());
             
             return response;
             
@@ -177,74 +209,79 @@ public class UserCampaignRotationService {
      * Create tracker for the week without applying view (session will handle the view)
      */
     private UserCampaignTracker createTrackerForWeek(
-            String userId, String companyId, String campaignId,
-            Date currentDate, Date weekStartDate) {
-        
-        log.info("Creating tracker for user {} campaign {} week {}", userId, campaignId, weekStartDate);
-        
-        // Check if tracker already exists for this week
-        Optional<UserCampaignTracker> existing = userTrackerRepository
-                .findByUserIdAndCompanyIdAndCampaignIdAndWeekStartDate(
-                        userId, companyId, campaignId, weekStartDate);
-        
-        if (existing.isPresent()) {
-            log.info("Tracker already exists for user {} campaign {} week {}", userId, campaignId, weekStartDate);
-            return existing.get();
-        }
-        
-        // Create new tracker
-        UserCampaignTracker tracker = new UserCampaignTracker();
-        tracker.setId(UUID.randomUUID().toString());
-        tracker.setUserId(userId);
-        tracker.setCompanyId(companyId);
-        tracker.setCampaignId(campaignId);
-        tracker.setWeekStartDate(weekStartDate);
-        
-        // Get campaign details for initial values
-        Optional<CampaignMapping> campaignOpt = campaignRepository.findById(campaignId);
-        if (campaignOpt.isPresent()) {
-            CampaignMapping campaign = campaignOpt.get();
-            tracker.setRemainingWeeklyFrequency(campaign.getFrequencyPerWeek());
-            
-            // Handle display cap from existing trackers if any
-            List<UserCampaignTracker> existingTrackers = userTrackerRepository
-                    .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
-            
-            if (!existingTrackers.isEmpty()) {
-                // Find the most recent tracker to get remaining display cap
-                UserCampaignTracker mostRecent = existingTrackers.stream()
-                        .max(Comparator.comparing(t -> t.getLastViewDate() != null ? 
-                                t.getLastViewDate() : new Date(0)))
-                        .orElse(null);
-                
-                if (mostRecent != null) {
-                    tracker.setRemainingDisplayCap(mostRecent.getRemainingDisplayCap());
-                    log.info("Using existing display cap {} for user {} campaign {}", 
-                            mostRecent.getRemainingDisplayCap(), userId, campaignId);
-                } else {
-                    tracker.setRemainingDisplayCap(campaign.getDisplayCapping());
-                }
-            } else {
-                // First time with this campaign
-                tracker.setRemainingDisplayCap(campaign.getDisplayCapping());
-                log.info("Setting initial display cap {} for user {} campaign {}", 
-                        campaign.getDisplayCapping(), userId, campaignId);
-            }
-        } else {
-            // Default values if campaign not found (shouldn't happen)
-            log.warn("Campaign {} not found when creating tracker, using defaults", campaignId);
-            tracker.setRemainingWeeklyFrequency(5);
-            tracker.setRemainingDisplayCap(10);
-        }
-        
-        // Don't set lastViewDate yet - that happens when session ends
-        tracker.setLastViewDate(null);
-        
-        log.info("Created new tracker for user {} campaign {}: weeklyFreq={}, displayCap={}", 
-                userId, campaignId, tracker.getRemainingWeeklyFrequency(), tracker.getRemainingDisplayCap());
-        
-        return userTrackerRepository.save(tracker);
+        String userId, String companyId, CampaignMapping campaign, Date weekStartDate) {
+    
+    log.info("Creating new tracker for user {} campaign {} week {}", userId, campaign.getId(), weekStartDate);
+    
+    // Double-check that tracker doesn't already exist
+    Optional<UserCampaignTracker> existing = userTrackerRepository
+            .findByUserIdAndCompanyIdAndCampaignIdAndWeekStartDate(
+                    userId, companyId, campaign.getId(), weekStartDate);
+    
+    if (existing.isPresent()) {
+        log.info("Tracker already exists - returning existing one");
+        return existing.get();
     }
+    
+    // Create new tracker
+    UserCampaignTracker tracker = new UserCampaignTracker();
+    tracker.setId(UUID.randomUUID().toString());
+    tracker.setUserId(userId);
+    tracker.setCompanyId(companyId);
+    tracker.setCampaignId(campaign.getId());
+    tracker.setWeekStartDate(weekStartDate);
+    
+    // Set initial weekly frequency from campaign
+    Integer campaignWeeklyFreq = campaign.getFrequencyPerWeek();
+    if (campaignWeeklyFreq == null || campaignWeeklyFreq <= 0) {
+        campaignWeeklyFreq = 5; // Default
+        log.warn("Campaign {} has null/zero weekly frequency, using default: {}", campaign.getId(), campaignWeeklyFreq);
+    }
+    tracker.setRemainingWeeklyFrequency(campaignWeeklyFreq);
+    
+    // Set display cap - check for existing usage across all weeks
+    Integer campaignDisplayCap = campaign.getDisplayCapping();
+    if (campaignDisplayCap == null || campaignDisplayCap <= 0) {
+        campaignDisplayCap = 10; // Default
+        log.warn("Campaign {} has null/zero display capping, using default: {}", campaign.getId(), campaignDisplayCap);
+    }
+    
+    // Check if user has previous trackers for this campaign (any week)
+    List<UserCampaignTracker> allUserTrackers = userTrackerRepository
+            .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaign.getId());
+    
+    if (!allUserTrackers.isEmpty()) {
+        // Find the most recent tracker to get remaining display cap
+        UserCampaignTracker mostRecent = allUserTrackers.stream()
+                .max(Comparator.comparing(t -> t.getLastViewDate() != null ? 
+                        t.getLastViewDate() : new Date(0)))
+                .orElse(null);
+        
+        if (mostRecent != null && mostRecent.getRemainingDisplayCap() != null) {
+            tracker.setRemainingDisplayCap(mostRecent.getRemainingDisplayCap());
+            log.info("Using remaining display cap from previous tracker: {}", mostRecent.getRemainingDisplayCap());
+        } else {
+            tracker.setRemainingDisplayCap(campaignDisplayCap);
+            log.info("No valid previous display cap found, using campaign default: {}", campaignDisplayCap);
+        }
+    } else {
+        // First time with this campaign
+        tracker.setRemainingDisplayCap(campaignDisplayCap);
+        log.info("First time with campaign, using campaign display cap: {}", campaignDisplayCap);
+    }
+    
+    // No last view date yet
+    tracker.setLastViewDate(null);
+    
+    log.info("Saving new tracker - WeeklyFreq: {}, DisplayCap: {}", 
+            tracker.getRemainingWeeklyFrequency(), tracker.getRemainingDisplayCap());
+    
+    UserCampaignTracker savedTracker = userTrackerRepository.save(tracker);
+    
+    log.info("Successfully created tracker with ID: {}", savedTracker.getId());
+    
+    return savedTracker;
+}
     
     /**
      * Get the last campaign assigned to a user from any previous week

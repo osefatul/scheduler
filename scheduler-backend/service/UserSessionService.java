@@ -106,9 +106,10 @@ public class UserSessionService {
     @Transactional
     private void applyViewToDatabase(String userId, String companyId, String campaignId, Date weekStartDate, Date currentDate) {
         try {
-            log.info("Applying view to database immediately for user {} campaign {}", userId, campaignId);
+            log.info("=== APPLYING VIEW TO DATABASE ===");
+            log.info("User: {}, Company: {}, Campaign: {}, Week: {}", userId, companyId, campaignId, weekStartDate);
             
-            // Find the corresponding UserCampaignTracker
+            // Find the tracker
             Optional<UserCampaignTracker> persistentTrackerOpt = userCampaignTrackerRepository
                     .findByUserIdAndCompanyIdAndCampaignIdAndWeekStartDate(
                             userId, companyId, campaignId, weekStartDate);
@@ -116,29 +117,58 @@ public class UserSessionService {
             if (persistentTrackerOpt.isPresent()) {
                 UserCampaignTracker persistentTracker = persistentTrackerOpt.get();
                 
-                // Log before changes
-                log.info("Before applying view - weeklyFreq: {}, displayCap: {}", 
+                log.info("Found tracker ID: {}", persistentTracker.getId());
+                log.info("BEFORE update - WeeklyFreq: {}, DisplayCap: {}, LastView: {}", 
                         persistentTracker.getRemainingWeeklyFrequency(), 
-                        persistentTracker.getRemainingDisplayCap());
+                        persistentTracker.getRemainingDisplayCap(),
+                        persistentTracker.getLastViewDate());
                 
-                // Reduce frequency and display cap by 1 (immediate application)
-                persistentTracker.setRemainingWeeklyFrequency(
-                        Math.max(0, persistentTracker.getRemainingWeeklyFrequency() - 1));
-                persistentTracker.setRemainingDisplayCap(
-                        Math.max(0, persistentTracker.getRemainingDisplayCap() - 1));
+                // Apply the view
+                int newWeeklyFreq = Math.max(0, persistentTracker.getRemainingWeeklyFrequency() - 1);
+                int newDisplayCap = Math.max(0, persistentTracker.getRemainingDisplayCap() - 1);
+                
+                persistentTracker.setRemainingWeeklyFrequency(newWeeklyFreq);
+                persistentTracker.setRemainingDisplayCap(newDisplayCap);
                 persistentTracker.setLastViewDate(currentDate);
                 
-                // Save the updated tracker
-                userCampaignTrackerRepository.save(persistentTracker);
+                // Save and flush to ensure immediate persistence
+                UserCampaignTracker updated = userCampaignTrackerRepository.saveAndFlush(persistentTracker);
                 
-                log.info("Applied view to DB - NEW weeklyFreq: {}, NEW displayCap: {}", 
-                        persistentTracker.getRemainingWeeklyFrequency(), 
-                        persistentTracker.getRemainingDisplayCap());
+                log.info("AFTER update - WeeklyFreq: {}, DisplayCap: {}, LastView: {}", 
+                        updated.getRemainingWeeklyFrequency(), 
+                        updated.getRemainingDisplayCap(),
+                        updated.getLastViewDate());
+                
+                // Verify the update was saved
+                Optional<UserCampaignTracker> verifyOpt = userCampaignTrackerRepository
+                        .findByUserIdAndCompanyIdAndCampaignIdAndWeekStartDate(
+                                userId, companyId, campaignId, weekStartDate);
+                
+                if (verifyOpt.isPresent()) {
+                    UserCampaignTracker verified = verifyOpt.get();
+                    log.info("VERIFICATION - WeeklyFreq: {}, DisplayCap: {}", 
+                            verified.getRemainingWeeklyFrequency(), 
+                            verified.getRemainingDisplayCap());
+                } else {
+                    log.error("VERIFICATION FAILED - Tracker not found after save!");
+                }
                 
             } else {
-                log.error("UserCampaignTracker not found for user {} campaign {} week {}", 
+                log.error("UserCampaignTracker NOT FOUND for user {} campaign {} week {}", 
                         userId, campaignId, weekStartDate);
-                throw new RuntimeException("UserCampaignTracker not found - this should not happen");
+                
+                // List all trackers for this user to debug
+                List<UserCampaignTracker> allTrackers = userCampaignTrackerRepository
+                        .findByUserIdAndCompanyId(userId, companyId);
+                
+                log.error("Found {} total trackers for user {} company {}:", allTrackers.size(), userId, companyId);
+                for (UserCampaignTracker t : allTrackers) {
+                    log.error("  Tracker: campaign={}, week={}, freq={}, cap={}", 
+                            t.getCampaignId(), t.getWeekStartDate(), 
+                            t.getRemainingWeeklyFrequency(), t.getRemainingDisplayCap());
+                }
+                
+                throw new RuntimeException("UserCampaignTracker not found - cannot apply view");
             }
             
         } catch (Exception e) {
