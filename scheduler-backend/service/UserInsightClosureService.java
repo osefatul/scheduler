@@ -71,71 +71,74 @@ public class UserInsightClosureService {
      */
     @Transactional
     public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
-            String campaignId, Date effectiveDate) throws DataHandlingException {
-        
-        log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
-                userId, companyId, campaignId, effectiveDate);
-        
-        // Check if user has global opt-out
-        if (isUserGloballyOptedOut(userId, effectiveDate)) {
-            throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
-                    "User has opted out of all insights");
-        }
-        
-        // Find or create closure record
-        UserInsightClosure closure = closureRepository
-                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
-                .orElse(createNewClosure(userId, companyId, campaignId));
-        
-        // Increment closure count
-        closure.setClosureCount(closure.getClosureCount() + 1);
-        closure.setLastClosureDate(effectiveDate);
-        
-        InsightClosureResponseDTO response = new InsightClosureResponseDTO();
-        response.setCampaignId(campaignId);
-        response.setClosureCount(closure.getClosureCount());
-        response.setEffectiveDate(effectiveDate);
-        
-        if (closure.getClosureCount() == 1) {
-            // FIRST CLOSURE: Hide until next login
-            log.info("FIRST closure for campaign {} at date {}. Hide until next login.", campaignId, effectiveDate);
-            closure.setFirstClosureDate(effectiveDate);
-            response.setAction("HIDDEN_UNTIL_NEXT_LOGIN");
-            response.setMessage("This insight will be hidden until your next login.");
-            
-        } else if (closure.getClosureCount() == 2) {
-            // SECOND CLOSURE: Ask user preference
-            log.info("SECOND closure for campaign {} at date {}. Prompting user preference.", campaignId, effectiveDate);
-            
-            // Check if user has closed other campaigns before (for global prompt)
-            boolean hasClosedOtherCampaigns = hasUserClosedOtherCampaigns(userId, companyId, campaignId);
-            
-            if (hasClosedOtherCampaigns) {
-                // Ask about ALL future insights
-                response.setAction("PROMPT_GLOBAL_PREFERENCE");
-                response.setMessage("Would you like to see future insights/campaigns?");
-                response.setRequiresUserInput(true);
-                response.setIsGlobalPrompt(true);
-            } else {
-                // Ask about THIS campaign only
-                response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
-                response.setMessage("Would you like to see this insight again in the future?");
-                response.setRequiresUserInput(true);
-                response.setIsGlobalPrompt(false);
-            }
-            
-        } else {
-            // MULTIPLE CLOSURES: Should not happen with correct logic
-            log.warn("Multiple closures ({}) for campaign {} - this shouldn't happen", 
-                    closure.getClosureCount(), campaignId);
-            response.setAction("UNEXPECTED_MULTIPLE_CLOSURE");
-            response.setMessage("Unexpected closure count. Please contact support.");
-        }
-        
-        closure.setUpdatedDate(effectiveDate);
-        closureRepository.save(closure);
-        return response;
+    String campaignId, Date effectiveDate) throws DataHandlingException {
+
+log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
+        userId, companyId, campaignId, effectiveDate);
+
+// Check if user has global opt-out
+if (isUserGloballyOptedOut(userId, effectiveDate)) {
+    throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
+            "User has opted out of all insights");
+}
+
+// Find or create closure record
+UserInsightClosure closure = closureRepository
+        .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
+        .orElse(createNewClosure(userId, companyId, campaignId));
+
+// Increment closure count
+closure.setClosureCount(closure.getClosureCount() + 1);
+closure.setLastClosureDate(effectiveDate);
+
+InsightClosureResponseDTO response = new InsightClosureResponseDTO();
+response.setCampaignId(campaignId);
+response.setClosureCount(closure.getClosureCount());
+response.setEffectiveDate(effectiveDate);
+
+if (closure.getClosureCount() == 1) {
+    // FIRST CLOSURE: Record closure but DO NOT block campaign
+    log.info("FIRST closure for campaign {} at date {}. Campaign remains eligible based on normal rules.", 
+            campaignId, effectiveDate);
+    closure.setFirstClosureDate(effectiveDate);
+    response.setAction("RECORDED_FIRST_CLOSURE");
+    response.setMessage("Closure recorded. Campaign remains available based on normal eligibility rules.");
+    response.setRequiresUserInput(false);
+    
+} else if (closure.getClosureCount() == 2) {
+    // SECOND CLOSURE: Ask user preference and block until response
+    log.info("SECOND closure for campaign {} at date {}. Blocking until user provides preference.", 
+            campaignId, effectiveDate);
+    
+    // Check if user has closed other campaigns before (for global prompt)
+    boolean hasClosedOtherCampaigns = hasUserClosedOtherCampaigns(userId, companyId, campaignId);
+    
+    if (hasClosedOtherCampaigns) {
+        // Ask about ALL future insights
+        response.setAction("PROMPT_GLOBAL_PREFERENCE");
+        response.setMessage("Would you like to see future insights/campaigns?");
+        response.setRequiresUserInput(true);
+        response.setIsGlobalPrompt(true);
+    } else {
+        // Ask about THIS campaign only
+        response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
+        response.setMessage("Would you like to see this insight again in the future?");
+        response.setRequiresUserInput(true);
+        response.setIsGlobalPrompt(false);
     }
+    
+} else {
+    // MULTIPLE CLOSURES: Should not happen with correct logic
+    log.warn("Multiple closures ({}) for campaign {} - this shouldn't happen", 
+            closure.getClosureCount(), campaignId);
+    response.setAction("UNEXPECTED_MULTIPLE_CLOSURE");
+    response.setMessage("Unexpected closure count. Please contact support.");
+}
+
+closure.setUpdatedDate(effectiveDate);
+closureRepository.save(closure);
+return response;
+}
     
     /**
      * Check if user has closed other campaigns before (to determine global vs campaign prompt)
@@ -347,14 +350,20 @@ public class UserInsightClosureService {
         
         // If permanently blocked (user said "don't see again")
         if (closure.getNextEligibleDate() != null) {
+            log.debug("Campaign {} permanently blocked for user {} (user said 'don't see again')", 
+                     campaignId, userId);
             return true; // NEVER show this campaign again
         }
         
-        // If temporarily closed (closureCount >= 1)
-        if (closure.getClosureCount() >= 1) {
-            return true; // Closed until next rotation cycle
+        // CRITICAL CHANGE: closureCount=1 does NOT block campaign
+        // Only closureCount=2 blocks (waiting for user preference response)
+        if (closure.getClosureCount() == 2) {
+            log.debug("Campaign {} temporarily blocked for user {} (waiting for preference response)", 
+                     campaignId, userId);
+            return true; // Blocked until user responds to preference prompt
         }
         
+        // closureCount=1 or reset to 0 = not blocked
         return false;
     }
     
@@ -376,9 +385,12 @@ public class UserInsightClosureService {
         List<String> temporarilyClosedCampaignIds = new ArrayList<>();
         
         for (UserInsightClosure closure : closures) {
-            // Only include temporarily closed campaigns (closureCount >= 1 but no permanent block)
-            if (closure.getClosureCount() >= 1 && closure.getNextEligibleDate() == null) {
+            // CRITICAL CHANGE: Only block if closureCount >= 2 AND no permanent block
+            // closureCount = 1 is allowed (soft close, no blocking)
+            if (closure.getClosureCount() >= 2 && closure.getNextEligibleDate() == null) {
                 temporarilyClosedCampaignIds.add(closure.getCampaignId());
+                log.debug("Campaign {} temporarily blocked - closureCount: {}", 
+                         closure.getCampaignId(), closure.getClosureCount());
             }
         }
         
