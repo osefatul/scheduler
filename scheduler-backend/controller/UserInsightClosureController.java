@@ -2,6 +2,9 @@ package com.usbank.corp.dcr.api.controller;
 
 import com.usbank.corp.dcr.api.model.*;
 import com.usbank.corp.dcr.api.service.UserInsightClosureService;
+
+import entity.UserInsightClosure;
+
 import com.usbank.corp.dcr.api.exception.DataHandlingException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -14,6 +17,11 @@ import model.InsightClosureResponseDTO;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -192,6 +200,95 @@ public class UserInsightClosureController {
       return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
     }
   }
+
+
+  @GetMapping("/debug/closure-status/{userId}/{companyId}/{campaignId}")
+@Operation(summary = "Debug closure status", description = "Get detailed closure status for debugging")
+public ResponseEntity<Map<String, Object>> debugClosureStatus(
+        @PathVariable String userId,
+        @PathVariable String companyId,
+        @PathVariable String campaignId,
+        @RequestParam(value = "date", required = false) String dateStr) {
+    
+    try {
+        Date checkDate = parseEffectiveDate(dateStr);
+        Map<String, Object> debug = new HashMap<>();
+        
+        // Basic info
+        debug.put("userId", userId);
+        debug.put("companyId", companyId);
+        debug.put("campaignId", campaignId);
+        debug.put("checkDate", checkDate);
+        
+        // Check closure record
+        Optional<UserInsightClosure> closureOpt = closureService.getUserClosureHistory(userId, companyId, campaignId);
+        if (closureOpt.isPresent()) {
+            UserInsightClosure closure = closureOpt.get();
+            debug.put("closureExists", true);
+            debug.put("closureCount", closure.getClosureCount());
+            debug.put("permanentlyClosed", closure.getPermanentlyClosed());
+            debug.put("nextEligibleDate", closure.getNextEligibleDate());
+            debug.put("lastClosureDate", closure.getLastClosureDate());
+            debug.put("closureReason", closure.getClosureReason());
+            
+            // Check if next eligible date is after check date
+            if (closure.getNextEligibleDate() != null) {
+                debug.put("nextEligibleAfterCheckDate", closure.getNextEligibleDate().after(checkDate));
+            }
+        } else {
+            debug.put("closureExists", false);
+        }
+        
+        // Check methods
+        debug.put("isCampaignClosed", closureService.isCampaignClosedForUser(userId, companyId, campaignId, checkDate));
+        debug.put("isGloballyOptedOut", closureService.isUserGloballyOptedOut(userId, checkDate));
+        
+        List<String> closedCampaigns = closureService.getClosedCampaignIds(userId, companyId, checkDate);
+        debug.put("allClosedCampaigns", closedCampaigns);
+        debug.put("isCampaignInClosedList", closedCampaigns.contains(campaignId));
+        
+        return ResponseEntity.ok(debug);
+        
+    } catch (Exception e) {
+        Map<String, Object> error = new HashMap<>();
+        error.put("error", e.getMessage());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+}
+
+@GetMapping("/debug/all-closures/{userId}/{companyId}")
+@Operation(summary = "Debug all closures", description = "Get all closure records for a user")
+public ResponseEntity<List<Map<String, Object>>> debugAllClosures(
+        @PathVariable String userId,
+        @PathVariable String companyId) {
+    
+    try {
+        List<UserInsightClosure> closures = closureService.getUserClosures(userId, companyId);
+        List<Map<String, Object>> result = new ArrayList<>();
+        
+        for (UserInsightClosure closure : closures) {
+            Map<String, Object> closureInfo = new HashMap<>();
+            closureInfo.put("campaignId", closure.getCampaignId());
+            closureInfo.put("closureCount", closure.getClosureCount());
+            closureInfo.put("permanentlyClosed", closure.getPermanentlyClosed());
+            closureInfo.put("nextEligibleDate", closure.getNextEligibleDate());
+            closureInfo.put("lastClosureDate", closure.getLastClosureDate());
+            closureInfo.put("closureReason", closure.getClosureReason());
+            closureInfo.put("optOutAllInsights", closure.getOptOutAllInsights());
+            result.add(closureInfo);
+        }
+        
+        return ResponseEntity.ok(result);
+        
+    } catch (Exception e) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new ArrayList<>());
+    }
+}
+
+
+
+
+  
 
   private InsightClosureResponseDTO createErrorResponse(String message) {
     InsightClosureResponseDTO response = new InsightClosureResponseDTO();

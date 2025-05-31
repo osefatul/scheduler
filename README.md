@@ -468,3 +468,50 @@ CREATE INDEX idx_user_campaign_campaign_id ON user_campaign_tracker(campaign_id)
 CREATE INDEX idx_user_campaign_week_date ON user_campaign_tracker(week_start_date);
 CREATE INDEX idx_user_campaign_user_company_week ON user_campaign_tracker(user_id, company_id, week_start_date);
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+----------------------------------------------------------------------------------------
+
+/*
+Use these curl commands to debug:
+
+1. First, check current closure status:
+curl "http://localhost:8080/api/v1/insights/closure/debug/closure-status/user123/comp456/camp789?date=2025-06-15"
+
+2. Set the preference:
+curl -X POST "http://localhost:8080/api/v1/insights/closure/preference" \
+-H "Content-Type: application/json" \
+-d '{
+  "userId": "user123",
+  "companyId": "comp456",
+  "campaignId": "camp789",
+  "wantsToSeeAgain": false,
+  "reason": "Not interested",
+  "preferenceDate": "2025-06-01"
+}'
+
+3. Check closure status after setting preference:
+curl "http://localhost:8080/api/v1/insights/closure/debug/closure-status/user123/comp456/camp789?date=2025-06-15"
+
+4. Check all closures for the user:
+curl "http://localhost:8080/api/v1/insights/closure/debug/all-closures/user123/comp456"
+
+5. Try rotation during wait period:
+curl "http://localhost:8080/api/v1/rotatecampaign/next?date=20250615&company=comp456&userId=user123"
+
+6. Try rotation after wait period:
+curl "http://localhost:8080/api/v1/rotatecampaign/next?date=20250705&company=comp456&userId=user123"
+
+The debug endpoints will show you exactly what's happening with the closure logic.
+*/
