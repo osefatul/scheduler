@@ -27,208 +27,244 @@ import java.util.stream.Collectors;
 
 @Service
 @Slf4j
+// ===== 1. UserInsightClosureService.java (COMPLETE UPDATED FILE) =====
+
+package com.usbank.corp.dcr.api.service;
+
+import com.usbank.corp.dcr.api.entity.*;
+import com.usbank.corp.dcr.api.exception.DataHandlingException;
+import com.usbank.corp.dcr.api.model.*;
+import com.usbank.corp.dcr.api.repository.*;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Service
+@Slf4j
 public class UserInsightClosureService {
-
-    private static final long ONE_MONTH_MILLIS = 30L * 24L * 60L * 60L * 1000L; // 30 days in milliseconds
-
+    
     @Autowired
     private UserInsightClosureRepository closureRepository;
-
+    
     @Autowired
     private UserGlobalPreferenceRepository globalPreferenceRepository;
-
+    
     @Autowired
     private UserCampaignTrackerRepository userTrackerRepository;
-
-    /**
-     * Check if user is in 1-month wait period (should see NO campaigns)
-     */
-    public boolean isUserInWaitPeriod(String userId, String companyId) {
-        return isUserInWaitPeriod(userId, companyId, new Date());
-    }
-
-    /**
-     * Check if user is in 1-month wait period at specific date
-     * During wait period, user should see NO campaigns at all
-     */
-    public boolean isUserInWaitPeriod(String userId, String companyId, Date checkDate) {
-        List<UserInsightClosure> closures = closureRepository
-                .findByUserIdAndCompanyId(userId, companyId);
-
-        for (UserInsightClosure closure : closures) {
-            if (closure.getNextEligibleDate() != null &&
-                    closure.getNextEligibleDate().after(checkDate)) {
-                log.info("User {} in 1-month wait period until {} (checked at {})",
-                        userId, closure.getNextEligibleDate(), checkDate);
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
- * Get all permanently blocked campaigns for a user
- * These campaigns should NEVER be shown again, even after wait period
- */
-public List<String> getPermanentlyBlockedCampaignIds(String userId, String companyId) {
-    List<UserInsightClosure> closures = closureRepository
-            .findByUserIdAndCompanyId(userId, companyId);
     
-    return closures.stream()
-            .filter(closure -> closure.getNextEligibleDate() != null) // Has permanent block marker
-            .map(UserInsightClosure::getCampaignId)
-            .collect(Collectors.toList());
-}
-
     /**
      * Record an insight closure by a user (backward compatible)
      */
     @Transactional
-    public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId,
+    public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
             String campaignId) throws DataHandlingException {
         return recordInsightClosure(userId, companyId, campaignId, new Date());
     }
-
+    
     /**
      * Record an insight closure by a user with specific date
      */
     @Transactional
-    public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId,
+    public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
             String campaignId, Date effectiveDate) throws DataHandlingException {
-
-        log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}",
+        
+        log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
                 userId, companyId, campaignId, effectiveDate);
-
-        // Check if user has global opt-out at the effective date
+        
+        // Check if user has global opt-out
         if (isUserGloballyOptedOut(userId, effectiveDate)) {
-            throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(),
+            throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
                     "User has opted out of all insights");
         }
-
+        
         // Find or create closure record
         UserInsightClosure closure = closureRepository
                 .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
                 .orElse(createNewClosure(userId, companyId, campaignId));
-
+        
         // Increment closure count
         closure.setClosureCount(closure.getClosureCount() + 1);
         closure.setLastClosureDate(effectiveDate);
-
+        
         InsightClosureResponseDTO response = new InsightClosureResponseDTO();
         response.setCampaignId(campaignId);
         response.setClosureCount(closure.getClosureCount());
         response.setEffectiveDate(effectiveDate);
-
+        
         if (closure.getClosureCount() == 1) {
-            // First closure - just hide until next eligibility
-            log.info("First closure for campaign {} at date {}. Hiding until next eligibility.", campaignId,
-                    effectiveDate);
+            // FIRST CLOSURE: Hide until next login
+            log.info("FIRST closure for campaign {} at date {}. Hide until next login.", campaignId, effectiveDate);
             closure.setFirstClosureDate(effectiveDate);
-            response.setAction("HIDDEN_UNTIL_NEXT_ELIGIBILITY");
-            response.setMessage("This insight will be hidden until you're next eligible to see it.");
-
+            response.setAction("HIDDEN_UNTIL_NEXT_LOGIN");
+            response.setMessage("This insight will be hidden until your next login.");
+            
         } else if (closure.getClosureCount() == 2) {
-            // Second closure - ask if they want to see it again
-            log.info("Second closure for campaign {} at date {}. Prompting user preference.", campaignId,
-                    effectiveDate);
-            response.setAction("PROMPT_USER_PREFERENCE");
-            response.setMessage("Would you like to see this insight again in the future?");
-            response.setRequiresUserInput(true);
-
+            // SECOND CLOSURE: Ask user preference
+            log.info("SECOND closure for campaign {} at date {}. Prompting user preference.", campaignId, effectiveDate);
+            
+            // Check if user has closed other campaigns before (for global prompt)
+            boolean hasClosedOtherCampaigns = hasUserClosedOtherCampaigns(userId, companyId, campaignId);
+            
+            if (hasClosedOtherCampaigns) {
+                // Ask about ALL future insights
+                response.setAction("PROMPT_GLOBAL_PREFERENCE");
+                response.setMessage("Would you like to see future insights/campaigns?");
+                response.setRequiresUserInput(true);
+                response.setIsGlobalPrompt(true);
+            } else {
+                // Ask about THIS campaign only
+                response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
+                response.setMessage("Would you like to see this insight again in the future?");
+                response.setRequiresUserInput(true);
+                response.setIsGlobalPrompt(false);
+            }
+            
         } else {
-            // Multiple closures - check if we should ask about global opt-out
-            log.info("Multiple closures ({}) for campaign {} at date {}.", closure.getClosureCount(), campaignId,
-                    effectiveDate);
-            response.setAction("CONSIDER_GLOBAL_OPTOUT");
-            response.setMessage(
-                    "You've closed this insight multiple times. Would you like to stop seeing all insights?");
-            response.setRequiresUserInput(true);
+            // MULTIPLE CLOSURES: Should not happen with correct logic
+            log.warn("Multiple closures ({}) for campaign {} - this shouldn't happen", 
+                    closure.getClosureCount(), campaignId);
+            response.setAction("UNEXPECTED_MULTIPLE_CLOSURE");
+            response.setMessage("Unexpected closure count. Please contact support.");
         }
-
+        
         closure.setUpdatedDate(effectiveDate);
         closureRepository.save(closure);
         return response;
     }
-
+    
     /**
-     * Handle user's response to "see again?" prompt (backward compatible)
+     * Check if user has closed other campaigns before (to determine global vs campaign prompt)
      */
-    @Transactional
-    public void handleSecondClosureResponse(String userId, String companyId, String campaignId,
-            boolean wantsToSeeAgain, String reason) throws DataHandlingException {
-        handleSecondClosureResponse(userId, companyId, campaignId, wantsToSeeAgain, reason, new Date());
+    private boolean hasUserClosedOtherCampaigns(String userId, String companyId, String excludeCampaignId) {
+        List<UserInsightClosure> otherClosures = closureRepository
+                .findByUserIdAndCompanyId(userId, companyId)
+                .stream()
+                .filter(c -> !c.getCampaignId().equals(excludeCampaignId))
+                .filter(c -> c.getClosureCount() >= 2) // Has reached second closure on other campaigns
+                .collect(Collectors.toList());
+        
+        boolean hasOtherClosures = !otherClosures.isEmpty();
+        log.info("User {} has closed {} other campaigns with multiple closures", 
+                userId, otherClosures.size());
+        return hasOtherClosures;
     }
-
+    
     /**
-     * Handle user's response to "see again?" prompt with specific date
+     * Handle user's response to preference prompt (backward compatible)
      */
     @Transactional
-    public void handleSecondClosureResponse(String userId, String companyId, String campaignId,
-            boolean wantsToSeeAgain, String reason, Date effectiveDate) throws DataHandlingException {
-
+    public void handlePreferenceResponse(String userId, String companyId, String campaignId,
+            boolean wantsToSee, String reason, boolean isGlobalResponse) throws DataHandlingException {
+        handlePreferenceResponse(userId, companyId, campaignId, wantsToSee, reason, isGlobalResponse, new Date());
+    }
+    
+    /**
+     * Handle user's response to preference prompt
+     */
+    @Transactional
+    public void handlePreferenceResponse(String userId, String companyId, String campaignId,
+            boolean wantsToSee, String reason, boolean isGlobalResponse, Date effectiveDate) 
+            throws DataHandlingException {
+        
+        log.info("Handling preference response for user: {}, campaign: {}, wantsToSee: {}, isGlobal: {} at date: {}", 
+                userId, campaignId, wantsToSee, isGlobalResponse, effectiveDate);
+        
+        if (isGlobalResponse) {
+            // This is response to "see future insights?" prompt
+            if (wantsToSee) {
+                // User wants to see future insights - set 1-month wait for THIS campaign only
+                log.info("User wants future insights. Setting 1-month wait for campaign {}", campaignId);
+                setOneMonthWaitForCampaign(userId, companyId, campaignId, reason, effectiveDate);
+            } else {
+                // User doesn't want future insights - GLOBAL OPT-OUT
+                log.info("User doesn't want future insights. Global opt-out for user {}", userId);
+                handleGlobalOptOut(userId, reason, effectiveDate);
+            }
+        } else {
+            // This is response to "see this campaign again?" prompt
+            UserInsightClosure closure = closureRepository
+                    .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
+                    .orElseThrow(() -> new DataHandlingException(HttpStatus.NOT_FOUND.toString(),
+                            "No closure record found"));
+            
+            if (wantsToSee) {
+                // User wants to see THIS campaign again - reset to eligible
+                log.info("User wants to see campaign {} again. Resetting to eligible.", campaignId);
+                closure.setClosureCount(0);
+                closure.setPermanentlyClosed(false);
+                closure.setNextEligibleDate(null);
+                closure.setClosureReason(null);
+            } else {
+                // User doesn't want THIS campaign - set 1-month wait and permanent block
+                log.info("User doesn't want campaign {}. Setting permanent block with 1-month wait.", campaignId);
+                closure.setClosureReason(reason);
+                
+                Calendar cal = Calendar.getInstance();
+                cal.setTime(effectiveDate);
+                cal.add(Calendar.MONTH, 1);
+                closure.setNextEligibleDate(cal.getTime());
+                
+                log.info("Campaign {} permanently blocked with wait until: {}", campaignId, closure.getNextEligibleDate());
+            }
+            
+            closure.setUpdatedDate(effectiveDate);
+            closureRepository.save(closure);
+        }
+    }
+    
+    /**
+     * Set 1-month wait for a specific campaign
+     */
+    private void setOneMonthWaitForCampaign(String userId, String companyId, String campaignId, 
+            String reason, Date effectiveDate) {
         UserInsightClosure closure = closureRepository
                 .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
-                .orElseThrow(() -> new DataHandlingException(HttpStatus.NOT_FOUND.toString(),
-                        "No closure record found"));
-
-        if (wantsToSeeAgain) {
-            // User wants to see it again - reset everything
-            log.info("User wants to see campaign {} again at date {}. Resetting closure status.", campaignId,
-                    effectiveDate);
-            closure.setClosureCount(0); // CRITICAL FIX FOR ISSUE 2
-            closure.setPermanentlyClosed(false);
-            closure.setNextEligibleDate(null);
-            closure.setClosureReason(null);
-        } else {
-            // User doesn't want to see it - set one month wait
-            log.info("User doesn't want to see campaign {} again at date {}. Setting 1 month wait.", campaignId,
-                    effectiveDate);
-            closure.setClosureReason(reason);
-
-            // CRITICAL: Use Calendar.add for proper month calculation
-            Calendar cal = Calendar.getInstance();
-            cal.setTime(effectiveDate);
-            cal.add(Calendar.MONTH, 1);
-            closure.setNextEligibleDate(cal.getTime());
-
-            log.info("Next eligible date set to: {} for campaign {}", closure.getNextEligibleDate(), campaignId);
-
-            // Check if this is part of a pattern - multiple campaigns closed
-            checkForGlobalOptOutPattern(userId, companyId, effectiveDate);
-        }
-
+                .orElseThrow(() -> new RuntimeException("Closure record not found"));
+        
+        closure.setClosureReason(reason);
+        
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(effectiveDate);
+        cal.add(Calendar.MONTH, 1);
+        closure.setNextEligibleDate(cal.getTime());
         closure.setUpdatedDate(effectiveDate);
+        
         closureRepository.save(closure);
+        log.info("Set 1-month wait until {} for campaign {}", closure.getNextEligibleDate(), campaignId);
     }
-
+    
     /**
-     * Handle global opt-out request (backward compatible)
+     * Handle global opt-out (backward compatible)
      */
     @Transactional
     public void handleGlobalOptOut(String userId, String reason) {
         handleGlobalOptOut(userId, reason, new Date());
     }
-
+    
     /**
-     * Handle global opt-out request with specific date
+     * Handle global opt-out with specific date
      */
     @Transactional
     public void handleGlobalOptOut(String userId, String reason, Date effectiveDate) {
         log.info("Processing global opt-out for user: {} at date: {}", userId, effectiveDate);
-
+        
         // Create or update global preference
         UserGlobalPreference preference = globalPreferenceRepository
                 .findByUserId(userId)
                 .orElse(createNewGlobalPreference(userId));
-
+        
         preference.setInsightsEnabled(false);
         preference.setOptOutDate(effectiveDate);
         preference.setOptOutReason(reason);
         preference.setUpdatedDate(effectiveDate);
-
+        
         globalPreferenceRepository.save(preference);
-
+        
         // Mark all existing closures as opted out
         List<UserInsightClosure> userClosures = closureRepository.findByUserId(userId);
         for (UserInsightClosure closure : userClosures) {
@@ -237,67 +273,55 @@ public List<String> getPermanentlyBlockedCampaignIds(String userId, String compa
             closureRepository.save(closure);
         }
     }
-
+    
     /**
-     * Re-enable insights for a user (opt back in) (backward compatible)
+     * Check if user is in 1-month wait period (should see NO campaigns)
      */
-    @Transactional
-    public void enableInsights(String userId) {
-        enableInsights(userId, new Date());
+    public boolean isUserInWaitPeriod(String userId, String companyId) {
+        return isUserInWaitPeriod(userId, companyId, new Date());
     }
-
+    
     /**
-     * Re-enable insights for a user with specific date
+     * Check if user is in 1-month wait period at specific date
+     * During wait period, user should see NO campaigns at all
      */
-    @Transactional
-    public void enableInsights(String userId, Date effectiveDate) {
-        log.info("Re-enabling insights for user: {} at date: {}", userId, effectiveDate);
-
-        UserGlobalPreference preference = globalPreferenceRepository
-                .findByUserId(userId)
-                .orElse(createNewGlobalPreference(userId));
-
-        preference.setInsightsEnabled(true);
-        preference.setOptOutDate(null);
-        preference.setOptOutReason(null);
-        preference.setUpdatedDate(effectiveDate);
-
-        globalPreferenceRepository.save(preference);
-
-        // Update all closure records
-        List<UserInsightClosure> userClosures = closureRepository.findByUserId(userId);
-        for (UserInsightClosure closure : userClosures) {
-            closure.setOptOutAllInsights(false);
-            closure.setUpdatedDate(effectiveDate);
-            closureRepository.save(closure);
-        }
-    }
-
-    /**
-     * Check if user should be prompted for global opt-out
-     */
-    private void checkForGlobalOptOutPattern(String userId, String companyId, Date effectiveDate) {
-        // Count how many campaigns user has closed multiple times
+    public boolean isUserInWaitPeriod(String userId, String companyId, Date checkDate) {
         List<UserInsightClosure> closures = closureRepository
                 .findByUserIdAndCompanyId(userId, companyId);
-
-        long multipleClosureCount = closures.stream()
-                .filter(c -> c.getClosureCount() >= 2 && !c.getPermanentlyClosed())
-                .count();
-
-        if (multipleClosureCount >= 3) {
-            log.info("User {} has closed {} campaigns multiple times at date {}. Consider global opt-out prompt.",
-                    userId, multipleClosureCount, effectiveDate);
+        
+        for (UserInsightClosure closure : closures) {
+            if (closure.getNextEligibleDate() != null && 
+                closure.getNextEligibleDate().after(checkDate)) {
+                log.info("User {} in 1-month wait period until {} (checked at {})", 
+                        userId, closure.getNextEligibleDate(), checkDate);
+                return true;
+            }
         }
+        
+        return false;
     }
-
+    
+    /**
+     * Get all permanently blocked campaigns for a user
+     * These campaigns should NEVER be shown again, even after wait period
+     */
+    public List<String> getPermanentlyBlockedCampaignIds(String userId, String companyId) {
+        List<UserInsightClosure> closures = closureRepository
+                .findByUserIdAndCompanyId(userId, companyId);
+        
+        return closures.stream()
+                .filter(closure -> closure.getNextEligibleDate() != null) // Has permanent block marker
+                .map(UserInsightClosure::getCampaignId)
+                .collect(Collectors.toList());
+    }
+    
     /**
      * Check if a campaign is currently closed for a user (backward compatible)
      */
     public boolean isCampaignClosedForUser(String userId, String companyId, String campaignId) {
         return isCampaignClosedForUser(userId, companyId, campaignId, new Date());
     }
-
+    
     /**
      * Check if a campaign is currently closed for a user at specific date
      */
@@ -333,16 +357,17 @@ public List<String> getPermanentlyBlockedCampaignIds(String userId, String compa
         
         return false;
     }
-
+    
     /**
-     * Get all closed campaigns for a user (backward compatible)
+     * Get all temporarily closed campaigns for a user at specific date
+     * (Does not include permanently blocked campaigns)
      */
     public List<String> getClosedCampaignIds(String userId, String companyId) {
         return getClosedCampaignIds(userId, companyId, new Date());
     }
-
+    
     /**
-     * Get all closed campaigns for a user at specific date
+     * Get all temporarily closed campaigns for a user at specific date
      */
     public List<String> getClosedCampaignIds(String userId, String companyId, Date checkDate) {
         List<UserInsightClosure> closures = closureRepository
@@ -362,115 +387,58 @@ public List<String> getPermanentlyBlockedCampaignIds(String userId, String compa
         
         return temporarilyClosedCampaignIds;
     }
-
-    /**
-     * Helper method to check closure based on date
-     */
-    private boolean isCampaignClosedBasedOnClosure(UserInsightClosure closure, Date checkDate) {
-        // CRITICAL: If closure count is 0, not closed
-        if (closure.getClosureCount() == 0) {
-            return false;
-        }
-
-        // Check permanent closure
-        if (closure.getPermanentlyClosed()) {
-            return true;
-        }
-
-        // Check wait period
-        if (closure.getNextEligibleDate() != null &&
-                closure.getNextEligibleDate().after(checkDate)) {
-            return true;
-        }
-
-        // For first closure, check if eligible after other campaigns
-        if (closure.getClosureCount() == 1 && closure.getLastClosureDate() != null) {
-            return !hasViewedOtherCampaignsSince(closure.getUserId(),
-                    closure.getCompanyId(), closure.getCampaignId(),
-                    closure.getLastClosureDate(), checkDate);
-        }
-
-        return false;
-    }
-
-    /**
-     * Check if user has viewed other campaigns since a date (backward compatible)
-     */
-    private boolean hasViewedOtherCampaignsSince(String userId, String companyId,
-            String excludeCampaignId, Date sinceDate) {
-        return hasViewedOtherCampaignsSince(userId, companyId, excludeCampaignId, sinceDate, new Date());
-    }
-
-    /**
-     * Check if user has viewed other campaigns since a date up to check date
-     */
-    private boolean hasViewedOtherCampaignsSince(String userId, String companyId,
-            String excludeCampaignId, Date sinceDate, Date checkDate) {
-        List<UserCampaignTracker> trackers = userTrackerRepository
-                .findRecentByUserIdAndCompanyId(userId, companyId);
-
-        return trackers.stream()
-                .anyMatch(t -> !t.getCampaignId().equals(excludeCampaignId) &&
-                        t.getLastViewDate() != null &&
-                        t.getLastViewDate().after(sinceDate) &&
-                        !t.getLastViewDate().after(checkDate));
-    }
-
+    
     /**
      * Check if user has globally opted out (backward compatible)
      */
     public boolean isUserGloballyOptedOut(String userId) {
         return isUserGloballyOptedOut(userId, new Date());
     }
-
+    
     /**
      * Check if user has globally opted out at specific date
      */
     public boolean isUserGloballyOptedOut(String userId, Date checkDate) {
         Optional<UserGlobalPreference> prefOpt = globalPreferenceRepository
                 .findByUserId(userId);
-
+        
         if (prefOpt.isPresent()) {
             UserGlobalPreference pref = prefOpt.get();
             // If insights disabled and opt-out date is before or equal to check date
-            if (!pref.getInsightsEnabled() &&
-                    (pref.getOptOutDate() == null || !pref.getOptOutDate().after(checkDate))) {
-                log.debug("User {} globally opted out at date {} (opt-out date: {})",
-                        userId, checkDate, pref.getOptOutDate());
+            if (!pref.getInsightsEnabled() && 
+                (pref.getOptOutDate() == null || !pref.getOptOutDate().after(checkDate))) {
+                log.debug("User {} globally opted out at date {} (opt-out date: {})", 
+                         userId, checkDate, pref.getOptOutDate());
                 return true;
             }
         }
-
+        
         // Also check if any closure record has global opt-out
-        boolean hasGlobalOptOut = closureRepository.hasUserOptedOutGlobally(userId);
-        if (hasGlobalOptOut) {
-            log.debug("User {} has global opt-out flag in closure records", userId);
-        }
-        return hasGlobalOptOut;
+        return closureRepository.hasUserOptedOutGlobally(userId);
     }
-
+    
     /**
      * Get user's closure history for a campaign
      */
     public Optional<UserInsightClosure> getUserClosureHistory(String userId, String companyId, String campaignId) {
         return closureRepository.findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
     }
-
+    
     /**
      * Get all closures for a user in a company
      */
     public List<UserInsightClosure> getUserClosures(String userId, String companyId) {
         return closureRepository.findByUserIdAndCompanyId(userId, companyId);
     }
-
+    
     /**
-     * Reset closure for a specific campaign
+     * Reset closure for a specific campaign (for testing/admin purposes)
      */
     @Transactional
     public void resetCampaignClosure(String userId, String companyId, String campaignId) {
         Optional<UserInsightClosure> closureOpt = closureRepository
                 .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
-
+        
         if (closureOpt.isPresent()) {
             UserInsightClosure closure = closureOpt.get();
             closure.setClosureCount(0);
@@ -478,12 +446,57 @@ public List<String> getPermanentlyBlockedCampaignIds(String userId, String compa
             closure.setNextEligibleDate(null);
             closure.setClosureReason(null);
             closureRepository.save(closure);
+            log.info("Reset closure for user {} campaign {}", userId, campaignId);
         }
     }
-
+    
     /**
-     * Create new closure record
+     * Get closure statistics for analytics
      */
+    public ClosureStatisticsDTO getClosureStatistics(String campaignId) {
+        ClosureStatisticsDTO stats = new ClosureStatisticsDTO();
+        stats.setCampaignId(campaignId);
+        stats.setFirstTimeClosures(closureRepository.countClosuresByCampaign(campaignId, 1));
+        stats.setSecondTimeClosures(closureRepository.countClosuresByCampaign(campaignId, 2));
+        stats.setMultipleClosures(closureRepository.countClosuresByCampaign(campaignId, 3));
+        
+        // Calculate closure rate
+        List<UserInsightClosure> allClosures = closureRepository.findByCampaignId(campaignId);
+        long permanentClosures = allClosures.stream()
+                .filter(c -> c.getNextEligibleDate() != null)
+                .count();
+        stats.setPermanentClosures(permanentClosures);
+        
+        if (!allClosures.isEmpty()) {
+            stats.setClosureRate((double) permanentClosures / allClosures.size() * 100);
+        } else {
+            stats.setClosureRate(0.0);
+        }
+        
+        return stats;
+    }
+    
+    /**
+     * Get campaigns in wait period for a user
+     */
+    public List<CampaignWaitStatusDTO> getCampaignsInWaitPeriod(String userId, String companyId) {
+        List<UserInsightClosure> closures = closureRepository
+                .findCampaignsInWaitPeriod(userId, companyId, new Date());
+        
+        return closures.stream()
+                .map(closure -> {
+                    CampaignWaitStatusDTO status = new CampaignWaitStatusDTO();
+                    status.setCampaignId(closure.getCampaignId());
+                    status.setNextEligibleDate(closure.getNextEligibleDate());
+                    status.setClosureReason(closure.getClosureReason());
+                    status.setClosureCount(closure.getClosureCount());
+                    return status;
+                })
+                .collect(Collectors.toList());
+    }
+    
+    // ===== HELPER METHODS =====
+    
     private UserInsightClosure createNewClosure(String userId, String companyId, String campaignId) {
         UserInsightClosure closure = new UserInsightClosure();
         closure.setId(UUID.randomUUID().toString());
@@ -495,10 +508,7 @@ public List<String> getPermanentlyBlockedCampaignIds(String userId, String compa
         closure.setOptOutAllInsights(false);
         return closure;
     }
-
-    /**
-     * Create new global preference
-     */
+    
     private UserGlobalPreference createNewGlobalPreference(String userId) {
         UserGlobalPreference pref = new UserGlobalPreference();
         pref.setId(UUID.randomUUID().toString());
@@ -506,49 +516,28 @@ public List<String> getPermanentlyBlockedCampaignIds(String userId, String compa
         pref.setInsightsEnabled(true);
         return pref;
     }
-
+    
+    // ===== BACKWARD COMPATIBILITY METHODS =====
+    
     /**
-     * Get closure statistics for analytics
+     * @deprecated Use handlePreferenceResponse instead
      */
-    public ClosureStatisticsDTO getClosureStatistics(String campaignId) {
-        ClosureStatisticsDTO stats = new ClosureStatisticsDTO();
-        stats.setCampaignId(campaignId);
-        stats.setFirstTimeClosures(closureRepository.countClosuresByCampaign(campaignId, 1));
-        stats.setSecondTimeClosures(closureRepository.countClosuresByCampaign(campaignId, 2));
-        stats.setMultipleClosures(closureRepository.countClosuresByCampaign(campaignId, 3));
-
-        // Calculate closure rate
-        List<UserInsightClosure> allClosures = closureRepository.findByCampaignId(campaignId);
-        long permanentClosures = allClosures.stream()
-                .filter(UserInsightClosure::getPermanentlyClosed)
-                .count();
-        stats.setPermanentClosures(permanentClosures);
-
-        if (!allClosures.isEmpty()) {
-            stats.setClosureRate((double) permanentClosures / allClosures.size() * 100);
-        } else {
-            stats.setClosureRate(0.0);
-        }
-
-        return stats;
+    @Transactional
+    @Deprecated
+    public void handleSecondClosureResponse(String userId, String companyId, String campaignId,
+            boolean wantsToSeeAgain, String reason) throws DataHandlingException {
+        // Map old method to new method - assume campaign-specific response
+        handlePreferenceResponse(userId, companyId, campaignId, wantsToSeeAgain, reason, false, new Date());
     }
-
+    
     /**
-     * Get campaigns in wait period for a user
+     * @deprecated Use handlePreferenceResponse instead  
      */
-    public List<CampaignWaitStatusDTO> getCampaignsInWaitPeriod(String userId, String companyId) {
-        List<UserInsightClosure> closures = closureRepository
-                .findCampaignsInWaitPeriod(userId, companyId, new Date());
-
-        return closures.stream()
-                .map(closure -> {
-                    CampaignWaitStatusDTO status = new CampaignWaitStatusDTO();
-                    status.setCampaignId(closure.getCampaignId());
-                    status.setNextEligibleDate(closure.getNextEligibleDate());
-                    status.setClosureReason(closure.getClosureReason());
-                    status.setClosureCount(closure.getClosureCount());
-                    return status;
-                })
-                .collect(Collectors.toList());
+    @Transactional
+    @Deprecated
+    public void handleSecondClosureResponse(String userId, String companyId, String campaignId,
+            boolean wantsToSeeAgain, String reason, Date effectiveDate) throws DataHandlingException {
+        // Map old method to new method - assume campaign-specific response
+        handlePreferenceResponse(userId, companyId, campaignId, wantsToSeeAgain, reason, false, effectiveDate);
     }
 }

@@ -11,6 +11,7 @@ public class InsightClosureResponseDTO {
     private String message;
     private boolean requiresUserInput;
     private boolean previouslyClosed;
+    private Boolean isGlobalPrompt; // NEW: Indicates if prompt is global vs campaign-specific
     private Date effectiveDate; // NEW: Show what date was used
     private Date nextEligibleDate; // NEW: Show when user can see again
 }
