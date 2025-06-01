@@ -326,6 +326,7 @@ public class UserCampaignRotationService {
                     .findByUserIdAndCompanyId(userId, companyId);
 
             if (allTrackers.isEmpty()) {
+                log.info("No previous campaign assignments found for user {}", userId);
                 return null;
             }
 
@@ -338,13 +339,25 @@ public class UserCampaignRotationService {
                 return null;
             }
 
+            log.info("Last assigned campaign for user {}: {} (week starting {})",
+                    userId, mostRecentTracker.getCampaignId(), mostRecentTracker.getWeekStartDate());
+
             // Get the campaign details
             Optional<CampaignMapping> campaignOpt = campaignRepository
                     .findById(mostRecentTracker.getCampaignId());
 
-            return campaignOpt.orElse(null);
+            if (campaignOpt.isPresent()) {
+                CampaignMapping lastCampaign = campaignOpt.get();
+                log.info("Last campaign details: ID={}, Created={}",
+                        lastCampaign.getId(), lastCampaign.getCreatedDate());
+                return lastCampaign;
+            } else {
+                log.warn("Last assigned campaign {} not found in database", mostRecentTracker.getCampaignId());
+                return null;
+            }
+
         } catch (Exception e) {
-            log.error(String.format("Error getting last assigned campaign: %s", e.getMessage()), e);
+            log.error("Error getting last assigned campaign: {}", e.getMessage(), e);
             return null;
         }
     }
@@ -363,47 +376,64 @@ public class UserCampaignRotationService {
             return null;
         }
 
+        // CRITICAL FIX: Ensure campaigns are sorted by creation date
+        List<CampaignMapping> sortedCampaigns = new ArrayList<>(eligibleCampaigns);
+        sortedCampaigns.sort((c1, c2) -> {
+            int createdCompare = c1.getCreatedDate().compareTo(c2.getCreatedDate());
+            if (createdCompare != 0) {
+                return createdCompare;
+            }
+            return c1.getId().compareTo(c2.getId());
+        });
+
         // Get temporarily closed campaigns (not permanently blocked ones)
         List<String> temporarilyClosedCampaignIds = insightClosureService
                 .getClosedCampaignIds(userId, companyId, currentDate);
 
         log.info("Getting next campaign in rotation. Temporarily closed: {}", temporarilyClosedCampaignIds);
+        log.info("Sorted campaigns by creation date: {}",
+                sortedCampaigns.stream()
+                        .map(c -> c.getId() + "(" + c.getCreatedDate() + ")")
+                        .collect(Collectors.joining(", ")));
 
         // If this is the first campaign for the user
         if (lastCampaign == null) {
-            CampaignMapping firstAvailable = eligibleCampaigns.stream()
+            CampaignMapping firstAvailable = sortedCampaigns.stream()
                     .filter(c -> !temporarilyClosedCampaignIds.contains(c.getId()))
-                    .findFirst()
+                    .findFirst() // This will be the oldest created campaign
                     .orElse(null);
-            log.info("First campaign for user, selected: {}",
+            log.info("First campaign for user, selected: {} (oldest created)",
                     firstAvailable != null ? firstAvailable.getId() : "none");
             return firstAvailable;
         }
 
-        // Find last campaign's position
+        // Find last campaign's position in sorted list
         int lastIndex = -1;
-        for (int i = 0; i < eligibleCampaigns.size(); i++) {
-            if (eligibleCampaigns.get(i).getId().equals(lastCampaign.getId())) {
+        for (int i = 0; i < sortedCampaigns.size(); i++) {
+            if (sortedCampaigns.get(i).getId().equals(lastCampaign.getId())) {
                 lastIndex = i;
                 break;
             }
         }
+
+        log.info("Last campaign {} found at index {} in sorted list", lastCampaign.getId(), lastIndex);
 
         // If not found, start from beginning
         if (lastIndex == -1) {
             lastIndex = -1;
         }
 
-        // Find next non-temporarily-closed campaign in rotation
+        // Find next non-temporarily-closed campaign in sorted order
         int attempts = 0;
         int nextIndex = lastIndex;
 
-        while (attempts < eligibleCampaigns.size()) {
-            nextIndex = (nextIndex + 1) % eligibleCampaigns.size();
-            CampaignMapping candidate = eligibleCampaigns.get(nextIndex);
+        while (attempts < sortedCampaigns.size()) {
+            nextIndex = (nextIndex + 1) % sortedCampaigns.size();
+            CampaignMapping candidate = sortedCampaigns.get(nextIndex);
 
             if (!temporarilyClosedCampaignIds.contains(candidate.getId())) {
-                log.info("Selected next campaign in rotation: {}", candidate.getId());
+                log.info("Selected next campaign in rotation: {} (index {} in sorted list)",
+                        candidate.getId(), nextIndex);
                 return candidate;
             }
 
@@ -566,7 +596,7 @@ public class UserCampaignRotationService {
         // Get all campaigns for the company
         List<String> campaignIds = campaignCompanyService.getCampaignsForCompany(companyId);
 
-        log.info(String.format("Campaign IDs for company %s: %s", companyId, campaignIds));
+        log.info("Campaign IDs for company {}: {}", companyId, campaignIds);
 
         if (campaignIds.isEmpty()) {
             return new ArrayList<>();
@@ -575,20 +605,35 @@ public class UserCampaignRotationService {
         // Get campaign details
         List<CampaignMapping> campaigns = campaignRepository.findAllById(campaignIds);
 
-        log.info(String.format("Campaigns for company %s: Total campaigns: %d", companyId, campaigns.size()));
-        for (CampaignMapping campaign : campaigns) {
-            log.info(String.format("Campaign ID: %s, Name: %s, Status: %s, Start Date: %s, End Date: %s",
-                    campaign.getId(),
-                    campaign.getName(),
-                    campaign.getStatus(),
-                    campaign.getStartDate(),
-                    campaign.getEndDate()));
-        }
+        log.info("Campaigns for company {}: Total campaigns: {}", companyId, campaigns.size());
 
         // Filter campaigns based on date range and other criteria
-        return campaigns.stream()
+        List<CampaignMapping> eligibleCampaigns = campaigns.stream()
                 .filter(campaign -> isEligibleForRotation(campaign, currentDate))
                 .collect(Collectors.toList());
+
+        // CRITICAL FIX: Always sort by creation date (oldest first), then by ID for
+        // consistency
+        eligibleCampaigns.sort((c1, c2) -> {
+            // Primary sort: creation date (oldest first)
+            int createdCompare = c1.getCreatedDate().compareTo(c2.getCreatedDate());
+            if (createdCompare != 0) {
+                return createdCompare;
+            }
+            // Secondary sort: ID for consistent tie-breaking
+            return c1.getId().compareTo(c2.getId());
+        });
+
+        log.info("Eligible campaigns after sorting by creation date:");
+        for (CampaignMapping campaign : eligibleCampaigns) {
+            log.info("Campaign ID: {}, Name: {}, Created: {}, Start Date: {}",
+                    campaign.getId(),
+                    campaign.getName(),
+                    campaign.getCreatedDate(),
+                    campaign.getStartDate());
+        }
+
+        return eligibleCampaigns;
     }
 
     /**
