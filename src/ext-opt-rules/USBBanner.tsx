@@ -151,40 +151,53 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     const handleCloseIconClick = useCallback(async () => {
       if (isClosingInsight) return; // Prevent multiple clicks
 
-      // Hide banner immediately for better UX
-      setIsHidden(true);
+      console.log('Close icon clicked, calling closure API...');
 
-      // Call closure API
+      // Call closure API first - DON'T hide banner yet
       const closureResponse = await handleClosureAPI();
       
       if (!closureResponse) {
-        // If API call failed, show banner again
-        setIsHidden(false);
+        console.error('Closure API call failed');
+        // If API call failed, keep banner visible
         return;
       }
 
-      // Handle modal display based on closure count and response
-      if (closureResponse.closureCount === 1) {
-        // First closure - show first modal
-        if (closureResponse.requiresUserInput) {
-          setIsFirstModalOpen(true);
-          setIsHidden(false); // Show banner behind modal
-        }
-        // If no user input required, banner stays hidden
-      } else if (closureResponse.closureCount === 2) {
-        // Second closure - show second modal based on action
-        if (closureResponse.requiresUserInput) {
-          if (closureResponse.isGlobalPrompt) {
-            setIsSecondModalOpen(true);
-            setIsHidden(false); // Show banner behind modal
-          } else {
+      console.log('Closure API response:', closureResponse);
+
+      // Handle modal display based on API response action
+      if (closureResponse.requiresUserInput) {
+        console.log('User input required, showing modal based on action:', closureResponse.action);
+        
+        // Determine which modal to show based on the action from API
+        switch (closureResponse.action) {
+          case 'PROMPT_CAMPAIGN_PREFERENCE':
+            console.log('Showing first closure modal (campaign preference)');
             setIsFirstModalOpen(true);
-            setIsHidden(false); // Show banner behind modal
-          }
+            break;
+            
+          case 'PROMPT_GLOBAL_PREFERENCE':
+            console.log('Showing second closure modal (global preference)');
+            setIsSecondModalOpen(true);
+            break;
+            
+          case 'RECORDED_FIRST_CLOSURE':
+            console.log('First closure recorded, showing first closure modal');
+            setIsFirstModalOpen(true);
+            break;
+            
+          default:
+            console.log('Unknown action, showing first closure modal as fallback');
+            setIsFirstModalOpen(true);
+            break;
         }
-        // If no user input required, banner stays hidden
+        
+        // Banner stays visible behind modal
+        setIsHidden(false);
+      } else {
+        console.log('No user input required, hiding banner immediately');
+        // No user input required, hide banner immediately
+        setIsHidden(true);
       }
-      // For higher closure counts or permanent blocks, banner stays hidden
 
     }, [isClosingInsight, handleClosureAPI]);
 

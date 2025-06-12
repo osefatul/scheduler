@@ -1,4 +1,4 @@
-// Enhanced Banner.tsx
+// Enhanced Banner.tsx - COMPLETE UPDATED VERSION
 import React, { useEffect, useState, useCallback } from "react";
 import {
   ExternalPortalContainer,
@@ -12,6 +12,7 @@ import { useRotateCampaignNextQuery } from "@/external/services/campaignAPI";
 import { useGetBannerByIdQuery } from "@/external/services/bannerAPI";
 import { useLocation } from "react-router-dom";
 import { useSessionClosureManager } from './sessionClosureManager';
+import { useCampaignSessionManager } from './campaignSessionManager';
 import { useCheckOptOutStatusQuery } from './campaignClosureAPI';
 
 export const createBanner = (
@@ -185,28 +186,43 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
   // Session management
   const isDCRSessionActive = sessionStorage.getItem("isDCRSessionActive") === "true";
   
-  // Campaign rotation query
+  // NEW: Campaign session management - Store and retrieve campaign data
+  const { storedCampaign, storeCampaignData, hasStoredCampaignData } = useCampaignSessionManager();
+  
+  // NEW: Smart API skipping - skip if session is active AND we have stored campaign
+  const shouldSkipAPI = isDCRSessionActive && hasStoredCampaignData();
+  
+  console.log('Banner render state:', {
+    isDCRSessionActive,
+    hasStoredCampaignData: hasStoredCampaignData(),
+    shouldSkipAPI,
+    storedCampaign
+  });
+  
   const { data: nextData, error: rotationError } = useRotateCampaignNextQuery(
-    isDCRSessionActive ? null : { 
+    shouldSkipAPI ? null : { 
       username: userIdParam || "CORY", 
       company: companyIdParam || "ABCCORP", 
       date: dateParam || "20250715" 
     },
-    { skip: isDCRSessionActive }
+    { skip: shouldSkipAPI }
   );
 
   // Session closure management
-  const { hasUserClosures, clearSessionClosures } = useSessionClosureManager();
+  const { hasUserClosures, isCampaignClosed } = useSessionClosureManager();
 
-  // Set session active when API call succeeds
+  // NEW: Set session active and store campaign data when API call succeeds
   useEffect(() => {
-    if (!isDCRSessionActive && nextData?.success) {
-      console.log("API called successfully. Setting session to active.");
+    if (!isDCRSessionActive && nextData?.success && nextData.data) {
+      console.log("API called successfully. Setting session to active and storing campaign data.");
       sessionStorage.setItem("isDCRSessionActive", "true");
+      storeCampaignData(nextData.data);
+    } else if (isDCRSessionActive && hasStoredCampaignData()) {
+      console.log("DCR session is already active and has stored campaign data. API call skipped.");
     } else if (isDCRSessionActive) {
-      console.log("DCR session is already active. API call skipped.");
+      console.log("DCR session is active but no stored campaign data found.");
     }
-  }, [isDCRSessionActive, nextData]);
+  }, [isDCRSessionActive, nextData, storeCampaignData, hasStoredCampaignData]);
 
   // Debug: Log closure state
   useEffect(() => {
@@ -222,20 +238,43 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
     return null;
   }
 
-  // Render banner if we have campaign data and user hasn't globally opted out
-  if (nextData?.success === true) {
-    const campaign = nextData.data;
+  // NEW: Determine which campaign data to use - fresh API or stored session data
+  let campaignToShow = null;
+  
+  if (nextData?.success === true && nextData.data) {
+    // Fresh API response - use this data
+    campaignToShow = nextData.data;
+    console.log('Using fresh campaign data from API:', campaignToShow);
+  } else if (isDCRSessionActive && storedCampaign) {
+    // Use stored campaign data for same session
+    campaignToShow = {
+      campaignId: storedCampaign.campaignId,
+      id: storedCampaign.campaignId,
+      bannerId: storedCampaign.bannerId,
+      insightSubType: storedCampaign.insightSubType,
+      insightType: storedCampaign.insightType,
+      name: storedCampaign.name
+    };
+    console.log('Using stored campaign data from session:', campaignToShow);
+  }
+
+  // NEW: Check if campaign should be hidden due to session closures
+  if (campaignToShow && userIdParam && companyIdParam) {
+    const isClosedInSession = isCampaignClosed(campaignToShow.campaignId || campaignToShow.id, userIdParam, companyIdParam);
     
-    if (!campaign) {
-      console.log('No campaign data available');
+    if (isClosedInSession) {
+      console.log(`Campaign ${campaignToShow.campaignId || campaignToShow.id} is closed in this session, not showing banner`);
       return null;
     }
+  }
 
-    const BannerComponent = createBanner(campaign);
+  // Render banner if we have campaign data
+  if (campaignToShow) {
+    const BannerComponent = createBanner(campaignToShow);
 
     return (
       <BannerComponent 
-        bannerID={campaign?.bannerId} 
+        bannerID={campaignToShow.bannerId} 
         onNavigate={onNavigate}
         userId={userIdParam}
         companyId={companyIdParam}
@@ -250,6 +289,12 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
   }
 
   // Loading state or no data yet
+  if (!isDCRSessionActive) {
+    console.log('Waiting for campaign rotation API response...');
+  } else if (!hasStoredCampaignData()) {
+    console.log('Session is active but no stored campaign data available');
+  }
+  
   return null;
 };
 
