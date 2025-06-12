@@ -19,6 +19,7 @@ interface FirstClosurePopupProps {
   userId?: string;
   companyId?: string;
   closureCount?: number;
+  onPreferenceComplete?: () => void;
 }
 
 const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
@@ -27,11 +28,13 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
   campaignId,
   userId,
   companyId,
-  closureCount = 1
+  closureCount = 1,
+  onPreferenceComplete
 }) => {
   const [isSuccessPopupOpen, setSuccessPopupOpen] = useState(false);
   const [isDontShowAgainPopupOpen, setDontShowAgainPopupOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
 
   // API hooks
   const [setClosurePreference] = useSetClosurePreferenceMutation();
@@ -41,6 +44,8 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
   const handleCloseAndShowLater = useCallback(async () => {
     if (!campaignId || !userId || !companyId) {
       console.error('Missing required parameters for preference API');
+      // Still show success popup for UX
+      setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
       setSuccessPopupOpen(true);
       return;
     }
@@ -63,10 +68,12 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       // Update session - campaign remains eligible for future sessions
       recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE');
       
+      setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
       setSuccessPopupOpen(true);
     } catch (error) {
       console.error('Error setting preference:', error);
       // Show success popup anyway for UX
+      setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
       setSuccessPopupOpen(true);
     } finally {
       setIsProcessing(false);
@@ -83,6 +90,7 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
     if (!campaignId || !userId || !companyId) {
       console.error('Missing required parameters for preference API');
       setDontShowAgainPopupOpen(false);
+      setSuccessMessage("We won't show you this banner again.");
       setSuccessPopupOpen(true);
       return;
     }
@@ -108,24 +116,33 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       recordClosure(campaignId, userId, companyId, closureCount, 'PERMANENT_BLOCK');
       
       setDontShowAgainPopupOpen(false);
+      setSuccessMessage("We won't show you this banner again.");
       setSuccessPopupOpen(true);
     } catch (error) {
       console.error('Error setting preference:', error);
       // Show success popup anyway for UX
       setDontShowAgainPopupOpen(false);
+      setSuccessMessage("We won't show you this banner again.");
       setSuccessPopupOpen(true);
     } finally {
       setIsProcessing(false);
     }
   }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure]);
 
+  // SUCCESS POPUP CLOSES EVERYTHING AND HIDES BANNER
   const handleSuccessPopupClose = useCallback(() => {
     setSuccessPopupOpen(false);
+    // When success popup closes, call the preference complete callback to hide banner
+    if (onPreferenceComplete) {
+      onPreferenceComplete();
+    }
+    // Close the main modal
     handleClose();
-  }, [handleClose]);
+  }, [handleClose, onPreferenceComplete]);
 
   const handleDontShowAgainPopupClose = useCallback(() => {
     setDontShowAgainPopupOpen(false);
+    // Don't close main modal, user can still choose "Close & show later"
   }, []);
 
   return (
@@ -159,11 +176,11 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         </USBModal>
       </ExternalBannerPopup>
 
-      {/* Success confirmation popup */}
+      {/* Success confirmation popup - ONLY closes after this */}
       <PopupCloseandShowBanner
         isOpen={isSuccessPopupOpen}
         handleClose={handleSuccessPopupClose}
-        message="The banner has been closed for now and will be shown to you in a future session."
+        message={successMessage}
       />
 
       {/* Don't show again reasons modal */}
@@ -173,7 +190,7 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         headerText="We won't show you the banner again."
         optionsArray={businessOptions}
         onProceed={handleDontShowAgainSubmit}
-        onSubmit={() => handleDontShowAgainSubmit(null, "")}
+        onSubmit={handleDontShowAgainSubmit}
       />
     </>
   );

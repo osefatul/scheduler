@@ -1,4 +1,4 @@
-// Enhanced USBBanner.tsx
+// Enhanced USBBanner.tsx - COMPLETE UPDATED VERSION WITH ALL FIXES
 import React, { useState, useEffect, useCallback } from "react";
 import { BannerProps } from "./IUSBBanner";
 import {
@@ -164,52 +164,55 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
       console.log('Closure API response:', closureResponse);
 
-      // Handle modal display based on API response action
-      if (closureResponse.requiresUserInput) {
-        console.log('User input required, showing modal based on action:', closureResponse.action);
-        
-        // Determine which modal to show based on the action from API
-        switch (closureResponse.action) {
-          case 'PROMPT_CAMPAIGN_PREFERENCE':
-            console.log('Showing first closure modal (campaign preference)');
-            setIsFirstModalOpen(true);
-            break;
-            
-          case 'PROMPT_GLOBAL_PREFERENCE':
-            console.log('Showing second closure modal (global preference)');
-            setIsSecondModalOpen(true);
-            break;
-            
-          case 'RECORDED_FIRST_CLOSURE':
-            console.log('First closure recorded, showing first closure modal');
-            setIsFirstModalOpen(true);
-            break;
-            
-          default:
-            console.log('Unknown action, showing first closure modal as fallback');
-            setIsFirstModalOpen(true);
-            break;
+      // ALWAYS show modal if we get a closure response - let user make choice
+      // Determine which modal to show based on closure count and action
+      if (closureResponse.closureCount === 1) {
+        console.log('First closure - showing first modal');
+        setIsFirstModalOpen(true);
+      } else if (closureResponse.closureCount === 2) {
+        // Second closure - check if it's global or campaign specific
+        if (closureResponse.isGlobalPrompt || closureResponse.action === 'PROMPT_GLOBAL_PREFERENCE') {
+          console.log('Second closure with global prompt - showing second modal');
+          setIsSecondModalOpen(true);
+        } else {
+          console.log('Second closure with campaign prompt - showing first modal');
+          setIsFirstModalOpen(true);
         }
-        
-        // Banner stays visible behind modal
-        setIsHidden(false);
       } else {
-        console.log('No user input required, hiding banner immediately');
-        // No user input required, hide banner immediately
-        setIsHidden(true);
+        // Fallback for any other case - show first modal
+        console.log('Fallback case - showing first modal');
+        setIsFirstModalOpen(true);
       }
+      
+      // Banner stays visible until user completes the flow
+      setIsHidden(false);
 
     }, [isClosingInsight, handleClosureAPI]);
 
-    // Handle modal closures
+    // Handle banner closure callback - called when user completes preference flow
+    const handleBannerClosureComplete = useCallback(() => {
+      console.log('User completed preference flow, hiding banner');
+      setIsHidden(true);
+      setIsFirstModalOpen(false);
+      setIsSecondModalOpen(false);
+      
+      // Notify parent component
+      if (onBannerClosed && campaignId) {
+        onBannerClosed(campaignId, closureCount);
+      }
+    }, [onBannerClosed, campaignId, closureCount]);
+
+    // Handle modal closures - Banner only hides when user completes the preference flow
     const handleFirstModalClose = useCallback(() => {
       setIsFirstModalOpen(false);
-      setIsHidden(true); // Hide banner when modal closes
+      // DON'T hide banner here - let the success popup handle banner hiding
+      // Banner stays visible until user completes preference selection
     }, []);
 
     const handleSecondModalClose = useCallback(() => {
       setIsSecondModalOpen(false);
-      setIsHidden(true); // Hide banner when modal closes
+      // DON'T hide banner here - let the success popup handle banner hiding
+      // Banner stays visible until user completes preference selection
     }, []);
 
     // Don't render if banner should be hidden
@@ -296,6 +299,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
             userId={userId}
             companyId={companyId}
             closureCount={closureCount}
+            onPreferenceComplete={handleBannerClosureComplete}
           />
         )}
 
@@ -307,6 +311,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
             userId={userId}
             companyId={companyId}
             closureCount={closureCount}
+            onPreferenceComplete={handleBannerClosureComplete}
           />
         )}
       </>

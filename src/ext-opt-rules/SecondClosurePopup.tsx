@@ -19,6 +19,7 @@ interface SecondClosurePopupProps {
   userId?: string;
   companyId?: string;
   closureCount?: number;
+  onPreferenceComplete?: () => void;
 }
 
 const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
@@ -27,7 +28,8 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   campaignId,
   userId,
   companyId,
-  closureCount = 2
+  closureCount = 2,
+  onPreferenceComplete
 }) => {
   const [isSuccessPopupOpen, setSuccessPopupOpen] = useState(false);
   const [isSharedModalOpen, setSharedModalOpen] = useState(false);
@@ -60,6 +62,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
     if (!campaignId || !userId || !companyId) {
       console.error('Missing required parameters for preference API');
       setSharedModalOpen(false);
+      setSuccessMessage("Your preference has been updated.");
       setSuccessPopupOpen(true);
       return;
     }
@@ -87,7 +90,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
 
       } else {
         // Global: This leads to global opt-out question
-        // The reason here is why they don't want to see ads, which could lead to global opt-out
+        // The reason here is why they don't want to see ads, which leads to global opt-out
         await setClosurePreference({
           userId,
           companyId,
@@ -119,12 +122,19 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
 
   const handleSharedModalClose = useCallback(() => {
     setSharedModalOpen(false);
+    // Don't close main modal, user can still make other choices
   }, []);
 
+  // SUCCESS POPUP CLOSES EVERYTHING AND HIDES BANNER
   const handleSuccessPopupClose = useCallback(() => {
     setSuccessPopupOpen(false);
+    // When success popup closes, call the preference complete callback to hide banner
+    if (onPreferenceComplete) {
+      onPreferenceComplete();
+    }
+    // Close the main modal
     handleClose();
-  }, [handleClose]);
+  }, [handleClose, onPreferenceComplete]);
 
   return (
     <>
@@ -157,7 +167,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         </USBModal>
       </SecondBannerExternalBannerPopup>
 
-      {/* Success confirmation popup */}
+      {/* Success confirmation popup - ONLY closes after this */}
       <PopupCloseandShowBanner
         isOpen={isSuccessPopupOpen}
         handleClose={handleSuccessPopupClose}
@@ -175,8 +185,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         }
         optionsArray={sharedModalOptions}
         onProceed={handleSharedModalSubmit}
-        onSubmit={() => handleSharedModalSubmit(null, "")}
-        disabled={isProcessing}
+        onSubmit={handleSharedModalSubmit}
       />
     </>
   );
