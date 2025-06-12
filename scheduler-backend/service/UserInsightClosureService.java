@@ -310,12 +310,18 @@ return response;
      */
     public List<String> getPermanentlyBlockedCampaignIds(String userId, String companyId) {
         List<UserInsightClosure> closures = closureRepository
-                .findByUserIdAndCompanyId(userId, companyId);
-        
-        return closures.stream()
-                .filter(closure -> closure.getNextEligibleDate() != null) // Has permanent block marker
-                .map(UserInsightClosure::getCampaignId)
-                .collect(Collectors.toList());
+            .findByUserIdAndCompanyId(userId, companyId);
+    
+    return closures.stream()
+            .filter(closure -> {
+                // Campaign is permanently blocked if:
+                // 1. It has a nextEligibleDate (means user said "don't show again")
+                // 2. OR it's marked as permanently closed
+                return closure.getNextEligibleDate() != null || 
+                       (closure.getPermanentlyClosed() != null && closure.getPermanentlyClosed());
+            })
+            .map(UserInsightClosure::getCampaignId)
+            .collect(Collectors.toList());
     }
     
     /**
