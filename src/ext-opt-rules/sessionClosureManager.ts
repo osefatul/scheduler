@@ -92,6 +92,7 @@ class SessionClosureManager {
 
   /**
    * Check if a campaign is closed in current session
+   * UPDATED LOGIC: Only consider campaigns closed if they completed the preference flow
    */
   isCampaignClosedInSession(campaignId: string, userId: string, companyId: string): boolean {
     const closures = this.getSessionClosures();
@@ -104,12 +105,18 @@ class SessionClosureManager {
            c.sessionId === sessionId
     );
     
-    const isClosed = !!closure;
+    // CRITICAL CHANGE: Only consider closed if user completed preference flow
+    // Actions that indicate completed flow: TEMPORARY_CLOSE, PERMANENT_BLOCK, GLOBAL_OPT_OUT
+    const completedActions = ['TEMPORARY_CLOSE', 'PERMANENT_BLOCK', 'GLOBAL_OPT_OUT'];
+    const isClosed = closure && completedActions.includes(closure.action);
+    
     if (isClosed) {
       console.log(`Campaign ${campaignId} is closed in session (${closure.action})`);
+    } else if (closure) {
+      console.log(`Campaign ${campaignId} has closure record but not completed (${closure.action})`);
     }
     
-    return isClosed;
+    return !!isClosed;
   }
 
   /**

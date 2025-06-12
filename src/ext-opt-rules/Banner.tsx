@@ -77,9 +77,9 @@ export const createBanner = (
       }
     }, [campaign?.campaignId, userId, companyId, isCampaignClosed, optOutResponse]);
 
-    // Handle banner closure callback
+    // Handle banner closure callback - ONLY called when user COMPLETES preference flow
     const handleBannerClosed = useCallback((campaignId: string, closureCount: number) => {
-      console.log(`Banner ${campaignId} closed with count ${closureCount}`);
+      console.log(`Banner ${campaignId} COMPLETED closure flow with count ${closureCount} - hiding from parent`);
       setBannerHidden(true);
       
       // Additional logic can be added here for analytics, etc.
@@ -258,7 +258,9 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
     console.log('Using stored campaign data from session:', campaignToShow);
   }
 
-  // NEW: Check if campaign should be hidden due to session closures
+  // Check if campaign should be hidden due to session closures
+  const { isCampaignClosed } = useSessionClosureManager();
+  
   if (campaignToShow && userIdParam && companyIdParam) {
     const isClosedInSession = isCampaignClosed(campaignToShow.campaignId || campaignToShow.id, userIdParam, companyIdParam);
     

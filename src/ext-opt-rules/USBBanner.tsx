@@ -125,18 +125,25 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           const closureData = response.data;
           setClosureCount(closureData.closureCount);
 
-          // Record closure in session
-          recordClosure(
-            campaignId,
-            userId,
-            companyId,
-            closureData.closureCount,
-            closureData.action
-          );
-
-          // Notify parent component
-          if (onBannerClosed) {
-            onBannerClosed(campaignId, closureData.closureCount);
+          // IMPORTANT: Record closure but don't mark as "closed" for first closure
+          if (closureData.closureCount === 1) {
+            // First closure: record but don't block campaign
+            recordClosure(
+              campaignId,
+              userId,
+              companyId,
+              closureData.closureCount,
+              'FIRST_CLOSURE_RECORDED' // This won't block the campaign
+            );
+          } else {
+            // Second+ closure: record with API action
+            recordClosure(
+              campaignId,
+              userId,
+              companyId,
+              closureData.closureCount,
+              closureData.action
+            );
           }
 
           return closureData;
@@ -145,7 +152,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
         console.error('Error calling closure API:', error);
         return null;
       }
-    }, [campaignId, userId, companyId, closeInsight, recordClosure, onBannerClosed]);
+    }, [campaignId, userId, companyId, closeInsight, recordClosure]);
 
     // Handle close icon click
     const handleCloseIconClick = useCallback(async () => {
@@ -164,12 +171,19 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
       console.log('Closure API response:', closureResponse);
 
-      // ALWAYS show modal if we get a closure response - let user make choice
-      // Determine which modal to show based on closure count and action
+      // CRITICAL LOGIC CHANGE: 
+      // First closure (closureCount = 1) should NOT show modal immediately
+      // Modal should only show on SECOND and subsequent clicks
+      
       if (closureResponse.closureCount === 1) {
-        console.log('First closure - showing first modal');
-        setIsFirstModalOpen(true);
-      } else if (closureResponse.closureCount === 2) {
+        console.log('FIRST closure - just close banner without modal');
+        // First closure: just close banner, no modal yet
+        setIsHidden(true);
+        return;
+      } 
+      
+      // For closureCount >= 2, show appropriate modal
+      if (closureResponse.closureCount === 2) {
         // Second closure - check if it's global or campaign specific
         if (closureResponse.isGlobalPrompt || closureResponse.action === 'PROMPT_GLOBAL_PREFERENCE') {
           console.log('Second closure with global prompt - showing second modal');
@@ -178,14 +192,17 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           console.log('Second closure with campaign prompt - showing first modal');
           setIsFirstModalOpen(true);
         }
-      } else {
-        // Fallback for any other case - show first modal
-        console.log('Fallback case - showing first modal');
+      } else if (closureResponse.closureCount >= 3) {
+        // Third+ closure - show first modal as fallback
+        console.log('Multiple closures - showing first modal');
         setIsFirstModalOpen(true);
       }
       
-      // Banner stays visible until user completes the flow
-      setIsHidden(false);
+      // IMPORTANT: For modal cases, banner MUST stay visible
+      if (closureResponse.closureCount >= 2) {
+        setIsHidden(false);
+        console.log('Banner kept visible for modal display');
+      }
 
     }, [isClosingInsight, handleClosureAPI]);
 
@@ -215,14 +232,24 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
       // Banner stays visible until user completes preference selection
     }, []);
 
-    // Don't render if banner should be hidden
+    // Don't render if banner should be hidden AND no modals are open
     if (isHidden && !isFirstModalOpen && !isSecondModalOpen) {
+      console.log('Banner is hidden and no modals open - not rendering');
       return null;
     }
 
+    // ALWAYS render banner if any modal is open, regardless of isHidden state
+    const shouldShowBanner = !isHidden || isFirstModalOpen || isSecondModalOpen;
+    console.log('Banner render decision:', { 
+      isHidden, 
+      isFirstModalOpen, 
+      isSecondModalOpen, 
+      shouldShowBanner 
+    });
+
     return (
       <>
-        {!isHidden && (
+        {shouldShowBanner && (
           <BannerContainer
             width={width}
             maxWidth={maxWidth}
