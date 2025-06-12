@@ -57,11 +57,18 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
     setSharedModalOpen(true);
   }, []);
 
+  // Handle submission from shared modal via onSubmit (no arguments)
+  const handleSharedModalOnSubmit = useCallback(async () => {
+    // onSubmit is called after onProceed, so we can just close the modal
+    // The actual API call is handled by onProceed
+    console.log('SharedModal onSubmit called - closing modal');
+    setSharedModalOpen(false);
+  }, []);
+
   // Handle submission from shared modal
   const handleSharedModalSubmit = useCallback(async (selectedReason: string | null, additionalComments: string) => {
     if (!campaignId || !userId || !companyId) {
       console.error('Missing required parameters for preference API');
-      setSharedModalOpen(false);
       setSuccessMessage("Your preference has been updated.");
       setSuccessPopupOpen(true);
       return;
@@ -106,15 +113,13 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         setSuccessMessage("You have been opted out of all future insights and campaigns.");
       }
 
-      setSharedModalOpen(false);
       setSuccessPopupOpen(true);
 
     } catch (error) {
       console.error('Error setting preference:', error);
       // Show success popup anyway for UX
-      setSharedModalOpen(false);
-      setSuccessPopupOpen(true);
       setSuccessMessage("Your preference has been updated.");
+      setSuccessPopupOpen(true);
     } finally {
       setIsProcessing(false);
     }
@@ -185,7 +190,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         }
         optionsArray={sharedModalOptions}
         onProceed={handleSharedModalSubmit}
-        onSubmit={handleSharedModalSubmit}
+        onSubmit={handleSharedModalOnSubmit}
       />
     </>
   );

@@ -85,6 +85,14 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
     setDontShowAgainPopupOpen(true);
   }, []);
 
+  // Handle submission from "Don't show again" modal via onSubmit (no arguments)
+  const handleDontShowAgainOnSubmit = useCallback(async () => {
+    // onSubmit is called after onProceed, so we can just close the modal
+    // The actual API call is handled by onProceed
+    console.log('SharedModal onSubmit called - closing modal');
+    setDontShowAgainPopupOpen(false);
+  }, []);
+
   // Handle submission from "Don't show again" modal
   const handleDontShowAgainSubmit = useCallback(async (selectedReason: string | null, additionalComments: string) => {
     if (!campaignId || !userId || !companyId) {
@@ -115,13 +123,11 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       // Update session - campaign is permanently blocked
       recordClosure(campaignId, userId, companyId, closureCount, 'PERMANENT_BLOCK');
       
-      setDontShowAgainPopupOpen(false);
       setSuccessMessage("We won't show you this banner again.");
       setSuccessPopupOpen(true);
     } catch (error) {
       console.error('Error setting preference:', error);
       // Show success popup anyway for UX
-      setDontShowAgainPopupOpen(false);
       setSuccessMessage("We won't show you this banner again.");
       setSuccessPopupOpen(true);
     } finally {
@@ -190,7 +196,7 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         headerText="We won't show you the banner again."
         optionsArray={businessOptions}
         onProceed={handleDontShowAgainSubmit}
-        onSubmit={handleDontShowAgainSubmit}
+        onSubmit={handleDontShowAgainOnSubmit}
       />
     </>
   );
