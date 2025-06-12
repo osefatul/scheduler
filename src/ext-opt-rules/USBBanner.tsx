@@ -127,13 +127,13 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
           // IMPORTANT: Record closure but don't mark as "closed" for first closure
           if (closureData.closureCount === 1) {
-            // First closure: record but don't block campaign
+            // First closure: record AND mark as closed for this session
             recordClosure(
               campaignId,
               userId,
               companyId,
               closureData.closureCount,
-              'FIRST_CLOSURE_RECORDED' // This won't block the campaign
+              'FIRST_CLOSURE_HIDE' // This WILL block the campaign in current session
             );
           } else {
             // Second+ closure: record with API action
