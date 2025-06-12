@@ -321,6 +321,10 @@ public class UserCampaignRotationService {
      */
     private CampaignMapping getLastAssignedCampaign(String userId, String companyId) {
         try {
+            // Get permanently blocked campaigns
+            List<String> permanentlyBlockedCampaignIds = insightClosureService
+                    .getPermanentlyBlockedCampaignIds(userId, companyId);
+
             // Find all trackers for this user and company
             List<UserCampaignTracker> allTrackers = userTrackerRepository
                     .findByUserIdAndCompanyId(userId, companyId);
@@ -330,16 +334,18 @@ public class UserCampaignRotationService {
                 return null;
             }
 
-            // Find the most recent tracker based on week start date
+            // Find the most recent tracker that is NOT permanently blocked
             UserCampaignTracker mostRecentTracker = allTrackers.stream()
+                    .filter(tracker -> !permanentlyBlockedCampaignIds.contains(tracker.getCampaignId()))
                     .max(Comparator.comparing(UserCampaignTracker::getWeekStartDate))
                     .orElse(null);
 
             if (mostRecentTracker == null) {
+                log.info("All previous campaigns for user {} are permanently blocked", userId);
                 return null;
             }
 
-            log.info("Last assigned campaign for user {}: {} (week starting {})",
+            log.info("Last assigned non-blocked campaign for user {}: {} (week starting {})",
                     userId, mostRecentTracker.getCampaignId(), mostRecentTracker.getWeekStartDate());
 
             // Get the campaign details
@@ -348,7 +354,7 @@ public class UserCampaignRotationService {
 
             if (campaignOpt.isPresent()) {
                 CampaignMapping lastCampaign = campaignOpt.get();
-                log.info("Last campaign details: ID={}, Created={}",
+                log.info("Last non-blocked campaign details: ID={}, Created={}",
                         lastCampaign.getId(), lastCampaign.getCreatedDate());
                 return lastCampaign;
             } else {
@@ -372,91 +378,92 @@ public class UserCampaignRotationService {
             String companyId,
             Date currentDate) {
 
-            if (eligibleCampaigns.isEmpty()) {
-                return null;
-            }
-        
-            // CRITICAL FIX: Get permanently blocked campaigns upfront
-            List<String> permanentlyBlockedCampaignIds = insightClosureService
-                    .getPermanentlyBlockedCampaignIds(userId, companyId);
-        
-            // CRITICAL FIX: Remove permanently blocked campaigns from eligible list
-            List<CampaignMapping> nonBlockedCampaigns = eligibleCampaigns.stream()
-                    .filter(c -> !permanentlyBlockedCampaignIds.contains(c.getId()))
-                    .collect(Collectors.toList());
-        
-            if (nonBlockedCampaigns.isEmpty()) {
-                log.info("No non-blocked campaigns available for rotation");
-                return null;
-            }
-        
-            // Sort by creation date for consistent rotation
-            nonBlockedCampaigns.sort((c1, c2) -> {
-                int createdCompare = c1.getCreatedDate().compareTo(c2.getCreatedDate());
-                if (createdCompare != 0) {
-                    return createdCompare;
-                }
-                return c1.getId().compareTo(c2.getId());
-            });
-        
-            // Get temporarily closed campaigns (not permanently blocked ones)
-            List<String> temporarilyClosedCampaignIds = insightClosureService
-                    .getClosedCampaignIds(userId, companyId, currentDate);
-        
-            log.info("Getting next campaign in rotation. Permanently blocked: {}, Temporarily closed: {}", 
-                        permanentlyBlockedCampaignIds, temporarilyClosedCampaignIds);
-            log.info("Non-blocked campaigns available: {}",
-                    nonBlockedCampaigns.stream()
-                            .map(c -> c.getId() + "(" + c.getCreatedDate() + ")")
-                            .collect(Collectors.joining(", ")));
-        
-            // If this is the first campaign for the user OR last campaign was permanently blocked
-            if (lastCampaign == null || permanentlyBlockedCampaignIds.contains(lastCampaign.getId())) {
-                CampaignMapping firstAvailable = nonBlockedCampaigns.stream()
-                        .filter(c -> !temporarilyClosedCampaignIds.contains(c.getId()))
-                        .findFirst()
-                        .orElse(null);
-                log.info("First campaign or last was blocked, selected: {} (oldest created)",
-                        firstAvailable != null ? firstAvailable.getId() : "none");
-                return firstAvailable;
-            }
-        
-            // Find last campaign's position in NON-BLOCKED sorted list
-            int lastIndex = -1;
-            for (int i = 0; i < nonBlockedCampaigns.size(); i++) {
-                if (nonBlockedCampaigns.get(i).getId().equals(lastCampaign.getId())) {
-                    lastIndex = i;
-                    break;
-                }
-            }
-        
-            log.info("Last campaign {} found at index {} in non-blocked sorted list", 
-                        lastCampaign.getId(), lastIndex);
-        
-            // If last campaign not found in non-blocked list, start from beginning
-            if (lastIndex == -1) {
-                lastIndex = -1;
-            }
-        
-            // Find next non-temporarily-closed campaign in sorted order
-            int attempts = 0;
-            int nextIndex = lastIndex;
-        
-            while (attempts < nonBlockedCampaigns.size()) {
-                nextIndex = (nextIndex + 1) % nonBlockedCampaigns.size();
-                CampaignMapping candidate = nonBlockedCampaigns.get(nextIndex);
-        
-                if (!temporarilyClosedCampaignIds.contains(candidate.getId())) {
-                    log.info("Selected next campaign in rotation: {} (index {} in non-blocked sorted list)",
-                            candidate.getId(), nextIndex);
-                    return candidate;
-                }
-        
-                attempts++;
-            }
-        
-            log.info("No eligible campaigns found in rotation");
+        if (eligibleCampaigns.isEmpty()) {
             return null;
+        }
+
+        // CRITICAL FIX: Get permanently blocked campaigns upfront
+        List<String> permanentlyBlockedCampaignIds = insightClosureService
+                .getPermanentlyBlockedCampaignIds(userId, companyId);
+
+        // CRITICAL FIX: Remove permanently blocked campaigns from eligible list
+        List<CampaignMapping> nonBlockedCampaigns = eligibleCampaigns.stream()
+                .filter(c -> !permanentlyBlockedCampaignIds.contains(c.getId()))
+                .collect(Collectors.toList());
+
+        if (nonBlockedCampaigns.isEmpty()) {
+            log.info("No non-blocked campaigns available for rotation");
+            return null;
+        }
+
+        // Sort by creation date for consistent rotation
+        nonBlockedCampaigns.sort((c1, c2) -> {
+            int createdCompare = c1.getCreatedDate().compareTo(c2.getCreatedDate());
+            if (createdCompare != 0) {
+                return createdCompare;
+            }
+            return c1.getId().compareTo(c2.getId());
+        });
+
+        // Get temporarily closed campaigns (not permanently blocked ones)
+        List<String> temporarilyClosedCampaignIds = insightClosureService
+                .getClosedCampaignIds(userId, companyId, currentDate);
+
+        log.info("Getting next campaign in rotation. Permanently blocked: {}, Temporarily closed: {}",
+                permanentlyBlockedCampaignIds, temporarilyClosedCampaignIds);
+        log.info("Non-blocked campaigns available: {}",
+                nonBlockedCampaigns.stream()
+                        .map(c -> c.getId() + "(" + c.getCreatedDate() + ")")
+                        .collect(Collectors.joining(", ")));
+
+        // If this is the first campaign for the user OR last campaign was permanently
+        // blocked
+        if (lastCampaign == null || permanentlyBlockedCampaignIds.contains(lastCampaign.getId())) {
+            CampaignMapping firstAvailable = nonBlockedCampaigns.stream()
+                    .filter(c -> !temporarilyClosedCampaignIds.contains(c.getId()))
+                    .findFirst()
+                    .orElse(null);
+            log.info("First campaign or last was blocked, selected: {} (oldest created)",
+                    firstAvailable != null ? firstAvailable.getId() : "none");
+            return firstAvailable;
+        }
+
+        // Find last campaign's position in NON-BLOCKED sorted list
+        int lastIndex = -1;
+        for (int i = 0; i < nonBlockedCampaigns.size(); i++) {
+            if (nonBlockedCampaigns.get(i).getId().equals(lastCampaign.getId())) {
+                lastIndex = i;
+                break;
+            }
+        }
+
+        log.info("Last campaign {} found at index {} in non-blocked sorted list",
+                lastCampaign.getId(), lastIndex);
+
+        // If last campaign not found in non-blocked list, start from beginning
+        if (lastIndex == -1) {
+            lastIndex = -1;
+        }
+
+        // Find next non-temporarily-closed campaign in sorted order
+        int attempts = 0;
+        int nextIndex = lastIndex;
+
+        while (attempts < nonBlockedCampaigns.size()) {
+            nextIndex = (nextIndex + 1) % nonBlockedCampaigns.size();
+            CampaignMapping candidate = nonBlockedCampaigns.get(nextIndex);
+
+            if (!temporarilyClosedCampaignIds.contains(candidate.getId())) {
+                log.info("Selected next campaign in rotation: {} (index {} in non-blocked sorted list)",
+                        candidate.getId(), nextIndex);
+                return candidate;
+            }
+
+            attempts++;
+        }
+
+        log.info("No eligible campaigns found in rotation");
+        return null;
     }
 
     /**
@@ -627,26 +634,15 @@ public class UserCampaignRotationService {
                 .filter(campaign -> isEligibleForRotation(campaign, currentDate))
                 .collect(Collectors.toList());
 
-
-
-        // Filter out permanently blocked campaigns for this user
-        List<String> permanentlyBlockedCampaignIds = insightClosureService
-                .getPermanentlyBlockedCampaignIds(userId, companyId);
-
-        List<CampaignMapping> nonBlockedCampaigns = eligibleCampaigns.stream()
-                .filter(campaign -> !permanentlyBlockedCampaignIds.contains(campaign.getId()))
-                .collect(Collectors.toList());
-
-
-
-
         // CRITICAL FIX: Always sort by creation date (oldest first), then by ID for
         // consistency
-        nonBlockedCampaigns.sort((c1, c2) -> {
+        eligibleCampaigns.sort((c1, c2) -> {
+            // Primary sort: creation date (oldest first)
             int createdCompare = c1.getCreatedDate().compareTo(c2.getCreatedDate());
             if (createdCompare != 0) {
                 return createdCompare;
             }
+            // Secondary sort: ID for consistent tie-breaking
             return c1.getId().compareTo(c2.getId());
         });
 
@@ -659,8 +655,7 @@ public class UserCampaignRotationService {
                     campaign.getStartDate());
         }
 
-
-        return nonBlockedCampaigns;
+        return eligibleCampaigns;
     }
 
     /**
