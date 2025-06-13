@@ -92,7 +92,7 @@ class SessionClosureManager {
 
   /**
    * Check if a campaign is closed in current session
-   * FIXED: Handle different closure scenarios properly
+   * FIXED: Distinguish between first-time closure and user preference closure
    */
   isCampaignClosedInSession(campaignId: string, userId: string, companyId: string): boolean {
     const closures = this.getSessionClosures();
@@ -105,14 +105,14 @@ class SessionClosureManager {
            c.sessionId === sessionId
     );
     
-    // UPDATED LOGIC: 
+    // CORRECTED LOGIC: 
     // - FIRST_CLOSURE_HIDE = first time close (hide for current session only)
-    // - TEMPORARY_CLOSE_SESSION = user chose "show later" (hide for current session, show in future)
+    // - USER_CHOSE_SHOW_LATER = user made preference choice (hide for current session but show modal next time)
     // - PERMANENT_BLOCK = user said "don't show again" (hide permanently)
     // - GLOBAL_OPT_OUT = user opted out globally (hide permanently)
     const sessionHideActions = [
       'FIRST_CLOSURE_HIDE', 
-      'TEMPORARY_CLOSE_SESSION', 
+      'USER_CHOSE_SHOW_LATER', 
       'PERMANENT_BLOCK', 
       'GLOBAL_OPT_OUT'
     ];
@@ -125,6 +125,28 @@ class SessionClosureManager {
     }
     
     return !!isClosed;
+  }
+
+  /**
+   * Check if user has previously made a preference choice (should show modal on next close)
+   */
+  hasUserMadePreferenceChoice(campaignId: string, userId: string, companyId: string): boolean {
+    const closures = this.getSessionClosures();
+    
+    // Check across ALL sessions if user ever chose "show later"
+    const userChoice = closures.find(
+      c => c.campaignId === campaignId && 
+           c.userId === userId && 
+           c.companyId === companyId &&
+           c.action === 'USER_CHOSE_SHOW_LATER'
+    );
+    
+    const hasChoice = !!userChoice;
+    if (hasChoice) {
+      console.log(`User previously chose "show later" for campaign ${campaignId}`);
+    }
+    
+    return hasChoice;
   }
 
   /**
@@ -208,10 +230,19 @@ export const useSessionClosureManager = () => {
     return sessionClosureManager.isCampaignClosedInSession(campaignId, userId, companyId);
   }, []);
 
+  const hasUserMadePreferenceChoice = useCallback((
+    campaignId: string,
+    userId: string,
+    companyId: string
+  ) => {
+    return sessionClosureManager.hasUserMadePreferenceChoice(campaignId, userId, companyId);
+  }, []);
+
   return {
     sessionClosures,
     recordClosure,
     isCampaignClosed,
+    hasUserMadePreferenceChoice,
     refreshClosures,
     clearSessionClosures: sessionClosureManager.clearSessionClosures.bind(sessionClosureManager),
     hasUserClosures: (userId: string, companyId: string) => 
