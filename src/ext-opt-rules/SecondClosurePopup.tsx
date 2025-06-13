@@ -59,10 +59,15 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
 
   // Handle submission from shared modal via onSubmit (no arguments)
   const handleSharedModalOnSubmit = useCallback(async () => {
-    // onSubmit is called after onProceed, so we can just close the modal
-    // The actual API call is handled by onProceed
-    console.log('SharedModal onSubmit called - closing modal');
+    // onSubmit is called after onProceed, so the API call is already done
+    // Close the SharedModal and show success popup
+    console.log('SharedModal onSubmit called - closing SharedModal and showing success popup');
     setSharedModalOpen(false);
+    
+    // Show success popup after SharedModal closes
+    setTimeout(() => {
+      setSuccessPopupOpen(true);
+    }, 100);
   }, []);
 
   // Handle submission from shared modal
@@ -80,24 +85,24 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
       const reason = selectedReason || additionalComments || "User provided feedback";
 
       if (modalType === 'campaign') {
-        // Campaign-specific: User wants to see this campaign again in future
+        // "Close now but show in future" - User wants to see future campaigns
+        // This should trigger 1-month wait period for THIS campaign but allow future campaigns
         await setClosurePreference({
           userId,
           companyId,
           campaignId,
-          wantsToSee: true, // User wants to see this campaign again
+          wantsToSee: false, // Don't want THIS campaign for now
           reason,
-          isGlobalResponse: false,
+          isGlobalResponse: true, // This affects global campaign eligibility  
           preferenceDate: new Date().toISOString().split('T')[0]
         }).unwrap();
 
-        console.log('Campaign preference set: Show in future');
+        console.log('Global preference set: Allow future campaigns after wait period');
         recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE');
-        setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
+        setSuccessMessage("You won't see this campaign for 1 month. Future campaigns may still be shown.");
 
       } else {
-        // Global: This leads to global opt-out question
-        // The reason here is why they don't want to see ads, which leads to global opt-out
+        // "Stop showing this ad" - Global opt-out
         await setClosurePreference({
           userId,
           companyId,

@@ -125,26 +125,14 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           const closureData = response.data;
           setClosureCount(closureData.closureCount);
 
-          // IMPORTANT: Record closure but don't mark as "closed" for first closure
-          if (closureData.closureCount === 1) {
-            // First closure: record AND mark as closed for this session
-            recordClosure(
-              campaignId,
-              userId,
-              companyId,
-              closureData.closureCount,
-              'FIRST_CLOSURE_HIDE' // This WILL block the campaign in current session
-            );
-          } else {
-            // Second+ closure: record with API action
-            recordClosure(
-              campaignId,
-              userId,
-              companyId,
-              closureData.closureCount,
-              closureData.action
-            );
-          }
+          // CORRECTED: Always record closure for session tracking
+          recordClosure(
+            campaignId,
+            userId,
+            companyId,
+            closureData.closureCount,
+            closureData.action || 'CLOSURE_RECORDED'
+          );
 
           return closureData;
         }
@@ -171,14 +159,17 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
       console.log('Closure API response:', closureResponse);
 
-      // CRITICAL LOGIC CHANGE: 
-      // First closure (closureCount = 1) should NOT show modal immediately
-      // Modal should only show on SECOND and subsequent clicks
+      // CORRECTED LOGIC BASED ON YOUR REQUIREMENTS:
+      // - First time ever (closureCount = 1): Just hide banner, no modal
+      // - Second time (closureCount = 2): Show first modal
+      // - If user chose "show later" previously: Show modal again
       
       if (closureResponse.closureCount === 1) {
-        console.log('FIRST closure - just close banner without modal');
-        // First closure: just close banner, no modal yet
+        console.log('FIRST closure ever - hiding banner without modal');
+        // First closure: just hide banner, no modal yet
         setIsHidden(true);
+        // Record as first closure
+        recordClosure(campaignId, userId, companyId, 1, 'FIRST_CLOSURE_HIDE');
         return;
       } 
       
@@ -189,22 +180,19 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           console.log('Second closure with global prompt - showing second modal');
           setIsSecondModalOpen(true);
         } else {
-          console.log('Second closure with campaign prompt - showing first modal');
+          console.log('Second closure - showing first modal');
           setIsFirstModalOpen(true);
         }
-      } else if (closureResponse.closureCount >= 3) {
-        // Third+ closure - show first modal as fallback
-        console.log('Multiple closures - showing first modal');
-        setIsFirstModalOpen(true);
-      }
-      
-      // IMPORTANT: For modal cases, banner MUST stay visible
-      if (closureResponse.closureCount >= 2) {
+        // Banner stays visible for modal interaction
         setIsHidden(false);
-        console.log('Banner kept visible for modal display');
+      } else if (closureResponse.closureCount >= 3) {
+        // Third+ closure - show appropriate modal
+        console.log('Multiple closures - showing appropriate modal');
+        setIsFirstModalOpen(true);
+        setIsHidden(false);
       }
 
-    }, [isClosingInsight, handleClosureAPI]);
+    }, [isClosingInsight, handleClosureAPI, campaignId, userId, companyId, recordClosure]);
 
     // Handle banner closure callback - called when user completes preference flow
     const handleBannerClosureComplete = useCallback(() => {

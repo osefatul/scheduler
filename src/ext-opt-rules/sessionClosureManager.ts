@@ -92,7 +92,7 @@ class SessionClosureManager {
 
   /**
    * Check if a campaign is closed in current session
-   * UPDATED LOGIC: First closure hides banner for session, second+ closure shows modals
+   * CORRECTED: Only hide if user made a permanent choice, not if they chose "show later"
    */
   isCampaignClosedInSession(campaignId: string, userId: string, companyId: string): boolean {
     const closures = this.getSessionClosures();
@@ -105,16 +105,20 @@ class SessionClosureManager {
            c.sessionId === sessionId
     );
     
-    // CRITICAL CHANGE: Consider closed if ANY closure exists in session
-    // First closure (FIRST_CLOSURE_HIDE) = hide banner for session
-    // Completed preference flows = permanently closed
-    const sessionHidingActions = ['FIRST_CLOSURE_HIDE', 'TEMPORARY_CLOSE', 'PERMANENT_BLOCK', 'GLOBAL_OPT_OUT'];
-    const isClosed = closure && sessionHidingActions.includes(closure.action);
+    // CRITICAL: Only consider closed if user made permanent choices
+    // FIRST_CLOSURE_HIDE = first time close (hide for session)
+    // PERMANENT_BLOCK = user said "don't show again" 
+    // GLOBAL_OPT_OUT = user opted out globally
+    // NOT TEMPORARY_CLOSE = user chose "show later" (should show modal again)
+    const permanentActions = ['FIRST_CLOSURE_HIDE', 'PERMANENT_BLOCK', 'GLOBAL_OPT_OUT'];
+    const isClosed = closure && permanentActions.includes(closure.action);
     
     if (isClosed) {
       console.log(`Campaign ${campaignId} is closed in session (${closure.action})`);
+    } else if (closure && closure.action === 'TEMPORARY_CLOSE') {
+      console.log(`Campaign ${campaignId} chose "show later" - will show modal again (${closure.action})`);
     } else if (closure) {
-      console.log(`Campaign ${campaignId} has closure record but not session-hidden (${closure.action})`);
+      console.log(`Campaign ${campaignId} has closure record but can show modal (${closure.action})`);
     }
     
     return !!isClosed;

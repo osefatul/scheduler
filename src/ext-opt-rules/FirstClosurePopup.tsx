@@ -87,10 +87,15 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
 
   // Handle submission from "Don't show again" modal via onSubmit (no arguments)
   const handleDontShowAgainOnSubmit = useCallback(async () => {
-    // onSubmit is called after onProceed, so we can just close the modal
-    // The actual API call is handled by onProceed
-    console.log('SharedModal onSubmit called - closing modal');
+    // onSubmit is called after onProceed, so the API call is already done
+    // Close the SharedModal and show success popup
+    console.log('SharedModal onSubmit called - closing SharedModal and showing success popup');
     setDontShowAgainPopupOpen(false);
+    
+    // Show success popup after SharedModal closes
+    setTimeout(() => {
+      setSuccessPopupOpen(true);
+    }, 100);
   }, []);
 
   // Handle submission from "Don't show again" modal
