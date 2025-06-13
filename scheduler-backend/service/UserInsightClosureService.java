@@ -195,33 +195,44 @@ if (isGlobalResponse) {
             .orElseThrow(() -> new DataHandlingException(HttpStatus.NOT_FOUND.toString(),
                     "No closure record found"));
     
-    log.info("BEFORE preference handling - closureCount: {}", closure.getClosureCount());
+    log.info("=== PREFERENCE RESPONSE DEBUG ===");
+    log.info("BEFORE: closureCount={}, permanent={}, nextEligible={}, reason={}", 
+             closure.getClosureCount(), closure.getPermanentlyClosed(), 
+             closure.getNextEligibleDate(), closure.getClosureReason());
     
     if (wantsToSee) {
-        // ✅ User wants to see THIS campaign again - mark as eligible
+        // User wants to see THIS campaign again - mark as eligible
         log.info("User wants to see campaign {} again. Marking as eligible.", campaignId);
         
         // Keep closure count, clear blocking flags
         closure.setPermanentlyClosed(false);
         closure.setNextEligibleDate(null);
-        closure.setClosureReason(reason != null ? reason : "User chose to see campaign again"); // ✅ Set reason
+        closure.setClosureReason(reason != null ? reason : "User chose to see campaign again");
         
     } else {
-        // ✅ User doesn't want THIS campaign - permanently block it
+        // User doesn't want THIS campaign - permanently block it
         log.info("User doesn't want campaign {}. Setting permanent block.", campaignId);
         
         closure.setClosureReason(reason != null ? reason : "User chose not to see campaign again");
-        closure.setPermanentlyClosed(true);
-        closure.setNextEligibleDate(null);  // Permanent block, no wait period needed
+        closure.setPermanentlyClosed(true);  // This should block the campaign
         
-        log.info("Campaign {} permanently blocked", campaignId);
+        // Set nextEligibleDate far in future for extra safety
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(effectiveDate);
+        cal.add(Calendar.YEAR, 10);  // 10 years in future = effectively permanent
+        closure.setNextEligibleDate(cal.getTime());
+        
+        log.info("Campaign {} permanently blocked with nextEligibleDate: {}", 
+                 campaignId, closure.getNextEligibleDate());
     }
     
     closure.setUpdatedDate(effectiveDate);
-    closureRepository.save(closure);
+    UserInsightClosure saved = closureRepository.save(closure);
     
-    log.info("AFTER preference handling - closureCount: {}, reason: {}, permanent: {}", 
-    closure.getClosureCount(), closure.getClosureReason(), closure.getPermanentlyClosed());
+    log.info("AFTER SAVE: closureCount={}, permanent={}, nextEligible={}, reason={}", 
+             saved.getClosureCount(), saved.getPermanentlyClosed(), 
+             saved.getNextEligibleDate(), saved.getClosureReason());
+    log.info("=== PREFERENCE RESPONSE COMPLETE ===");
 }
 }
     
@@ -317,16 +328,46 @@ if (isGlobalResponse) {
         List<UserInsightClosure> closures = closureRepository
             .findByUserIdAndCompanyId(userId, companyId);
     
-    return closures.stream()
-            .filter(closure -> {
-                // Campaign is permanently blocked if:
-                // 1. It has a nextEligibleDate (means user said "don't show again")
-                // 2. OR it's marked as permanently closed
-                return closure.getNextEligibleDate() != null || 
-                       (closure.getPermanentlyClosed() != null && closure.getPermanentlyClosed());
-            })
-            .map(UserInsightClosure::getCampaignId)
-            .collect(Collectors.toList());
+        log.info("=== PERMANENT BLOCK CHECK ===");
+        log.info("Found {} closure records for user {} company {}", closures.size(), userId, companyId);
+    
+        List<String> blockedCampaigns = new ArrayList<>();
+        
+        for (UserInsightClosure closure : closures) {
+            log.info("Campaign {}: permanent={}, nextEligible={}, reason={}, closureCount={}", 
+                     closure.getCampaignId(), 
+                     closure.getPermanentlyClosed(), 
+                     closure.getNextEligibleDate(),
+                     closure.getClosureReason(),
+                     closure.getClosureCount());
+            
+            // Campaign is permanently blocked if:
+            // 1. It's marked as permanently closed
+            // 2. OR it has a nextEligibleDate far in the future (10+ years = permanent)
+            boolean isPermanentlyClosed = closure.getPermanentlyClosed() != null && closure.getPermanentlyClosed();
+            
+            boolean hasFarFutureDate = false;
+            if (closure.getNextEligibleDate() != null) {
+                Calendar farFuture = Calendar.getInstance();
+                farFuture.add(Calendar.YEAR, 5); // 5+ years is considered permanent
+                hasFarFutureDate = closure.getNextEligibleDate().after(farFuture.getTime());
+            }
+            
+            boolean isBlocked = isPermanentlyClosed || hasFarFutureDate;
+            
+            if (isBlocked) {
+                blockedCampaigns.add(closure.getCampaignId());
+                log.info("Campaign {} is PERMANENTLY BLOCKED (permanent={}, farFuture={})", 
+                         closure.getCampaignId(), isPermanentlyClosed, hasFarFutureDate);
+            } else {
+                log.info("Campaign {} is NOT permanently blocked", closure.getCampaignId());
+            }
+        }
+        
+        log.info("Total permanently blocked campaigns: {}", blockedCampaigns);
+        log.info("=== END PERMANENT BLOCK CHECK ===");
+        
+        return blockedCampaigns;
     }
     
     /**
@@ -393,6 +434,10 @@ if (isGlobalResponse) {
         List<UserInsightClosure> closures = closureRepository
                 .findByUserIdAndCompanyId(userId, companyId);
         
+        log.info("=== TEMPORARY BLOCK CHECK ===");
+        log.info("Checking {} closure records for user {} company {} at date {}", 
+                 closures.size(), userId, companyId, checkDate);
+        
         List<String> temporarilyClosedCampaignIds = new ArrayList<>();
         
         for (UserInsightClosure closure : closures) {
@@ -401,16 +446,23 @@ if (isGlobalResponse) {
                      closure.getCampaignId(), closure.getClosureCount(), 
                      closure.getPermanentlyClosed(), closure.getNextEligibleDate(), closure.getClosureReason());
             
-            // ✅ FIXED LOGIC: Only block campaigns in these specific states:
-            
-            // 1. Campaign is permanently blocked (user said "don't show again")
+            // Skip permanently blocked campaigns (handled by getPermanentlyBlockedCampaignIds)
             if (closure.getPermanentlyClosed() != null && closure.getPermanentlyClosed()) {
-                temporarilyClosedCampaignIds.add(closure.getCampaignId());
-                log.debug("Campaign {} blocked - permanently closed", closure.getCampaignId());
+                log.debug("Campaign {} skipped - permanently closed", closure.getCampaignId());
                 continue;
             }
             
-            // 2. Campaign has wait period (1-month wait from global preference)
+            // Check for far future nextEligibleDate (permanent block)
+            if (closure.getNextEligibleDate() != null) {
+                Calendar farFuture = Calendar.getInstance();
+                farFuture.add(Calendar.YEAR, 5);
+                if (closure.getNextEligibleDate().after(farFuture.getTime())) {
+                    log.debug("Campaign {} skipped - far future date (permanent)", closure.getCampaignId());
+                    continue;
+                }
+            }
+            
+            // 1. Campaign has short-term wait period (1-month wait from global preference)
             if (closure.getNextEligibleDate() != null && closure.getNextEligibleDate().after(checkDate)) {
                 temporarilyClosedCampaignIds.add(closure.getCampaignId());
                 log.debug("Campaign {} blocked - in wait period until {}", 
@@ -418,8 +470,7 @@ if (isGlobalResponse) {
                 continue;
             }
             
-            // 3. Campaign reached closureCount=2 but user hasn't responded yet
-            //    (This should be rare since modal forces response)
+            // 2. Campaign reached closureCount=2 but user hasn't responded yet
             if (closure.getClosureCount() >= 2 && 
                 closure.getClosureReason() == null &&  // No response given yet
                 closure.getPermanentlyClosed() == null &&  // Not decided yet
@@ -431,15 +482,12 @@ if (isGlobalResponse) {
                 continue;
             }
             
-            // ✅ All other cases: Campaign is ELIGIBLE
-            // This includes:
-            // - closureCount < 2 (normal eligibility)
-            // - closureCount >= 2 but user said "show later" (closureReason set, permanent=false, nextEligible=null)
-            log.debug("Campaign {} is ELIGIBLE - count={}", closure.getCampaignId(), closure.getClosureCount());
+            // All other cases: Campaign is ELIGIBLE
+            log.debug("Campaign {} is ELIGIBLE for temporary check", closure.getCampaignId());
         }
         
-        log.debug("Found {} blocked campaigns for user {} at date {}: {}", 
-                 temporarilyClosedCampaignIds.size(), userId, checkDate, temporarilyClosedCampaignIds);
+        log.info("Total temporarily blocked campaigns: {}", temporarilyClosedCampaignIds);
+        log.info("=== END TEMPORARY BLOCK CHECK ===");
         
         return temporarilyClosedCampaignIds;
     }

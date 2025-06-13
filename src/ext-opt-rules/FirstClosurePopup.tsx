@@ -111,13 +111,24 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
     try {
       const reason = selectedReason || additionalComments || "User chose not to see campaign again";
       
+      console.log('=== DONT SHOW AGAIN REQUEST ===');
+      console.log('Parameters:', {
+        userId,
+        companyId, 
+        campaignId,
+        wantsToSee: false,          // ✅ User doesn't want to see this campaign
+        reason,
+        isGlobalResponse: false,    // ✅ This is campaign-specific, not global
+        preferenceDate: new Date().toISOString().split('T')[0]
+      });
+      
       await setClosurePreference({
         userId,
         companyId,
         campaignId,
-        wantsToSee: false, // User doesn't want to see this campaign again
+        wantsToSee: false,          // ✅ CRITICAL: User doesn't want to see this campaign
         reason,
-        isGlobalResponse: false, // This is campaign-specific
+        isGlobalResponse: false,    // ✅ CRITICAL: This is campaign-specific
         preferenceDate: new Date().toISOString().split('T')[0]
       }).unwrap();
 
