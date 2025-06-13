@@ -69,7 +69,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
     // API and session management hooks
     const [closeInsight, { isLoading: isClosingInsight }] = useCloseInsightMutation();
-    const { isCampaignClosed, recordClosure, hasUserMadePreferenceChoice, sessionClosures, isFirstClosureEver } = useSessionClosureManager();
+    const { isCampaignClosed, recordClosure, hasUserMadePreferenceChoice, sessionClosures } = useSessionClosureManager();
 
     // Check if banner should be hidden on mount
     useEffect(() => {
@@ -145,62 +145,52 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     // Handle close icon click
     const handleCloseIconClick = useCallback(async () => {
       if (isClosingInsight) return; // Prevent multiple clicks
-
+    
       console.log('Close icon clicked, calling closure API...');
-
-      // CRITICAL: Check if this is the very first closure ever
-      const isVeryFirstClosure = isFirstClosureEver(campaignId, userId, companyId);
-
-      console.log('Is very first closure ever:', isVeryFirstClosure);
-
+    
       // Call closure API first - DON'T hide banner yet
       const closureResponse = await handleClosureAPI();
       
       if (!closureResponse) {
         console.error('Closure API call failed');
-        // If API call failed, keep banner visible
         return;
       }
-
+    
       console.log('Closure API response:', closureResponse);
-
-      // CRITICAL LOGIC:
-      // - First time ever (no previous closures in any session): Hide immediately
-      // - Any subsequent time (2nd session onwards): Show modal
-      
-      console.log('Closure decision:', {
-        closureCount: closureResponse.closureCount,
-        isVeryFirstClosure,
-        action: closureResponse.action
-      });
-      
-      if (closureResponse.closureCount === 1 && isVeryFirstClosure) {
-        console.log('VERY FIRST closure ever - hiding banner without modal');
-        // First closure ever: just hide banner, no modal
+    
+      // TRUST THE BACKEND RESPONSE - Remove frontend session checks
+      if (closureResponse.action === "RECORDED_FIRST_CLOSURE" && 
+          closureResponse.requiresUserInput === false) {
+        
+        console.log('Backend says this is first closure ever - hiding banner immediately');
+        // This is truly the first closure ever according to backend database
         setIsHidden(true);
-        // Record as first closure
-        recordClosure(campaignId, userId, companyId, 1, 'FIRST_CLOSURE_HIDE');
+        
+        // Record in session for current session tracking
+        recordClosure(campaignId, userId, companyId, closureResponse.closureCount, 'FIRST_CLOSURE_HIDE');
+        
         // Notify parent
         if (onBannerClosed && campaignId) {
-          onBannerClosed(campaignId, 1);
+          onBannerClosed(campaignId, closureResponse.closureCount);
         }
-        return;
+        
       } else {
-        console.log('Not first closure - showing modal');
-        // Any closure after the first time - always show first modal
-        // (unless it's a special case where second modal is needed)
-        if (closureResponse.closureCount >= 2 && 
-            (closureResponse.isGlobalPrompt || closureResponse.action === 'PROMPT_GLOBAL_PREFERENCE')) {
+        console.log('Backend says show modal - requiresUserInput:', closureResponse.requiresUserInput);
+        
+        // Any other case - show appropriate modal based on backend response
+        if (closureResponse.isGlobalPrompt === true) {
+          console.log('Showing second modal for global preference');
           setIsSecondModalOpen(true);
         } else {
-          // For all other cases (including repeat closures in new sessions), show first modal
+          console.log('Showing first modal for campaign preference');
           setIsFirstModalOpen(true);
         }
+        
         // Keep banner visible while modal is open
         setIsHidden(false);
       }
-
-    }, [isClosingInsight, handleClosureAPI, campaignId, userId, companyId, recordClosure, isFirstClosureEver]);
+    
+    }, [isClosingInsight, handleClosureAPI, campaignId, userId, companyId, recordClosure, onBannerClosed]);
 
     // Handle banner closure callback - called when user completes preference flow
     const handleBannerClosureComplete = useCallback(() => {
