@@ -74,7 +74,8 @@ public class UserCampaignRotationService {
 
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
             log.info("=== ROTATION REQUEST START ===");
-            log.info("User: {}, Company: {}, Date: {}", userId, companyId, sdf.format(currentDate));
+            log.info("User: {}, Company: {}, Date: {}, Week Start: {}",
+                    userId, companyId, sdf.format(currentDate), sdf.format(weekStartDate));
 
             // CRITICAL CHECK 1: If user globally opted out
             if (insightClosureService.isUserGloballyOptedOut(userId, currentDate)) {
@@ -93,6 +94,14 @@ public class UserCampaignRotationService {
             // Get all eligible campaigns for the company
             List<CampaignMapping> eligibleCampaigns = getEligibleCampaigns(companyId, currentDate);
             log.info("Found {} eligible campaigns for company {}", eligibleCampaigns.size(), companyId);
+
+            // Log eligible campaigns
+            log.info("=== ELIGIBLE CAMPAIGNS FOR ROTATION ===");
+            for (CampaignMapping campaign : eligibleCampaigns) {
+                log.info("Campaign: {} ({}), Start: {}, End: {}, Created: {}",
+                        campaign.getId(), campaign.getName(),
+                        campaign.getStartDate(), campaign.getEndDate(), campaign.getCreatedDate());
+            }
 
             if (eligibleCampaigns.isEmpty()) {
                 log.info("No eligible campaigns found for company {} on date {}", companyId, sdf.format(currentDate));
@@ -118,8 +127,6 @@ public class UserCampaignRotationService {
             }
 
             // Filter out temporarily closed campaigns
-            // CRITICAL CHANGE: This now only includes closureCount=2 (waiting for response)
-            // closureCount=1 campaigns are NOT filtered out
             List<String> temporarilyClosedCampaignIds = insightClosureService
                     .getClosedCampaignIds(userId, companyId, currentDate);
 
@@ -128,7 +135,7 @@ public class UserCampaignRotationService {
                     .collect(Collectors.toList());
 
             log.info("After filtering temporarily closed campaigns: {} available", availableCampaigns.size());
-            log.info("Temporarily closed campaigns (closureCount=2 only): {}", temporarilyClosedCampaignIds);
+            log.info("Temporarily closed campaigns: {}", temporarilyClosedCampaignIds);
 
             if (availableCampaigns.isEmpty()) {
                 log.info("No available campaigns after filtering all closures");
@@ -171,16 +178,13 @@ public class UserCampaignRotationService {
                             "Your assigned campaign for this week has been permanently closed");
                 }
 
-                // Check if this weekly campaign is temporarily closed (closureCount=2 only)
+                // Check if this weekly campaign is temporarily closed
                 if (temporarilyClosedCampaignIds.contains(weeklyTracker.getCampaignId())) {
                     log.info("Weekly campaign {} is waiting for user response. No campaigns this week.",
                             weeklyTracker.getCampaignId());
                     throw new DataHandlingException(HttpStatus.OK.toString(),
                             "Your assigned campaign for this week is waiting for your preference response");
                 }
-
-                // IMPORTANT: Campaign with closureCount=1 can still be shown
-                // Only normal frequency/display rules apply
 
                 // Check remaining frequency and display cap
                 if (weeklyTracker.getRemainingWeeklyFrequency() <= 0) {
@@ -197,7 +201,7 @@ public class UserCampaignRotationService {
                             "This campaign has reached its display cap limit");
                 }
 
-                // Get the campaign details and continue with existing weekly campaign
+                // Get the campaign details
                 Optional<CampaignMapping> campaignOpt = campaignRepository.findById(weeklyTracker.getCampaignId());
                 if (!campaignOpt.isPresent()) {
                     throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
@@ -206,17 +210,27 @@ public class UserCampaignRotationService {
 
                 CampaignMapping campaign = campaignOpt.get();
 
-                // Verify user is still enrolled and campaign is still eligible
+                log.info("=== WEEKLY ASSIGNMENT VALIDATION ===");
+                log.info("Assigned campaign: {}, Checking basic validity (not rotation eligibility)",
+                        weeklyTracker.getCampaignId());
+                log.info("Campaign start: {}, end: {}, status: {}",
+                        campaign.getStartDate(), campaign.getEndDate(), campaign.getStatus());
+                log.info("Current date: {}, Within range: {}",
+                        sdf.format(currentDate), isWithinDateRange(campaign, currentDate));
+
+                // ✅ FIXED: Only check basic campaign validity, not rotation eligibility
+                // Honor the weekly assignment even if newer campaigns are now available
+                if (!isCampaignBasicallyValid(campaign, currentDate)) {
+                    log.warn("Campaign {} is no longer valid (ended or inactive)", campaign.getId());
+                    throw new DataHandlingException(HttpStatus.OK.toString(),
+                            "Assigned campaign is no longer active");
+                }
+
+                // Verify user is still enrolled
                 if (!validateUserBelongsToCompany(userId, companyId, campaign.getId())) {
                     log.warn("User {} is no longer enrolled in campaign {}", userId, campaign.getId());
                     throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(),
                             "User is no longer enrolled in the assigned campaign for this week");
-                }
-
-                if (!isEligibleForRotation(campaign, currentDate)) {
-                    log.warn("Campaign {} is no longer eligible for rotation", campaign.getId());
-                    throw new DataHandlingException(HttpStatus.OK.toString(),
-                            "Assigned campaign is no longer eligible");
                 }
 
                 // Apply the view
@@ -245,8 +259,9 @@ public class UserCampaignRotationService {
                     }
                 }
 
-                log.info("=== RETURNING EXISTING WEEKLY CAMPAIGN (with closureCount={}) ===",
-                        previousClosure.isPresent() ? previousClosure.get().getClosureCount() : 0);
+                log.info("=== RETURNING EXISTING WEEKLY CAMPAIGN ===");
+                log.info("Campaign: {} (assigned for week {}, remains valid despite newer campaigns available)",
+                        campaign.getId(), sdf.format(weekStartDate));
                 return response;
             }
 
@@ -314,6 +329,29 @@ public class UserCampaignRotationService {
             throw new DataHandlingException(HttpStatus.INTERNAL_SERVER_ERROR.toString(),
                     "Unexpected error: " + e.getMessage());
         }
+    }
+
+    /**
+     * Check if a campaign is basically valid (active status, within date range)
+     * This is different from isEligibleForRotation which considers rotation
+     * priority
+     * Use this for validating existing weekly assignments
+     */
+    private boolean isCampaignBasicallyValid(CampaignMapping campaign, Date currentDate) {
+        // Check if campaign is active
+        if (!"In progress".equals(campaign.getStatus())) {
+            log.debug("Campaign {} is not active (status: {})", campaign.getId(), campaign.getStatus());
+            return false;
+        }
+
+        // Check date range - campaign must still be within its date range
+        if (!isWithinDateRange(campaign, currentDate)) {
+            log.debug("Campaign {} is outside date range", campaign.getId());
+            return false;
+        }
+
+        log.debug("Campaign {} is basically valid", campaign.getId());
+        return true;
     }
 
     /**
