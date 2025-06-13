@@ -198,27 +198,21 @@ if (isGlobalResponse) {
     log.info("BEFORE preference handling - closureCount: {}", closure.getClosureCount());
     
     if (wantsToSee) {
-        // ✅ FIXED: User wants to see THIS campaign again - just mark as eligible
-        log.info("User wants to see campaign {} again. Marking as eligible (no wait period).", campaignId);
+        // ✅ User wants to see THIS campaign again - mark as eligible
+        log.info("User wants to see campaign {} again. Marking as eligible.", campaignId);
         
-        // Keep closure count (don't reset to 0)
-        // Clear any blocking flags
+        // Keep closure count, clear blocking flags
         closure.setPermanentlyClosed(false);
-        closure.setNextEligibleDate(null);  // ✅ Clear any wait period
-        closure.setClosureReason(null);
-        
-        // ✅ IMPORTANT: No wait period for "show later" choice!
+        closure.setNextEligibleDate(null);
+        closure.setClosureReason(reason != null ? reason : "User chose to see campaign again"); // ✅ Set reason
         
     } else {
-        // ✅ FIXED: User doesn't want THIS campaign - permanently block it
-        log.info("User doesn't want campaign {}. Setting permanent block (no wait period).", campaignId);
+        // ✅ User doesn't want THIS campaign - permanently block it
+        log.info("User doesn't want campaign {}. Setting permanent block.", campaignId);
         
-        closure.setClosureReason(reason);
+        closure.setClosureReason(reason != null ? reason : "User chose not to see campaign again");
         closure.setPermanentlyClosed(true);
-        
-        // ✅ IMPORTANT: No wait period needed for permanent block
-        // The permanent block itself prevents the campaign from showing
-        closure.setNextEligibleDate(null);  // Don't set wait period
+        closure.setNextEligibleDate(null);  // Permanent block, no wait period needed
         
         log.info("Campaign {} permanently blocked", campaignId);
     }
@@ -226,7 +220,8 @@ if (isGlobalResponse) {
     closure.setUpdatedDate(effectiveDate);
     closureRepository.save(closure);
     
-    log.info("AFTER preference handling - closureCount: {}", closure.getClosureCount());
+    log.info("AFTER preference handling - closureCount: {}, reason: {}, permanent: {}", 
+    closure.getClosureCount(), closure.getClosureReason(), closure.getPermanentlyClosed());
 }
 }
     
@@ -401,16 +396,49 @@ if (isGlobalResponse) {
         List<String> temporarilyClosedCampaignIds = new ArrayList<>();
         
         for (UserInsightClosure closure : closures) {
-            // CRITICAL CHANGE: Only block if closureCount >= 2 AND no permanent block
-            // closureCount = 1 is allowed (soft close, no blocking)
-            if (closure.getClosureCount() >= 2 && closure.getNextEligibleDate() == null) {
+            
+            log.debug("Checking closure for campaign {}: count={}, permanent={}, nextEligible={}, reason={}", 
+                     closure.getCampaignId(), closure.getClosureCount(), 
+                     closure.getPermanentlyClosed(), closure.getNextEligibleDate(), closure.getClosureReason());
+            
+            // ✅ FIXED LOGIC: Only block campaigns in these specific states:
+            
+            // 1. Campaign is permanently blocked (user said "don't show again")
+            if (closure.getPermanentlyClosed() != null && closure.getPermanentlyClosed()) {
                 temporarilyClosedCampaignIds.add(closure.getCampaignId());
-                log.debug("Campaign {} temporarily blocked - closureCount: {}", 
-                         closure.getCampaignId(), closure.getClosureCount());
+                log.debug("Campaign {} blocked - permanently closed", closure.getCampaignId());
+                continue;
             }
+            
+            // 2. Campaign has wait period (1-month wait from global preference)
+            if (closure.getNextEligibleDate() != null && closure.getNextEligibleDate().after(checkDate)) {
+                temporarilyClosedCampaignIds.add(closure.getCampaignId());
+                log.debug("Campaign {} blocked - in wait period until {}", 
+                         closure.getCampaignId(), closure.getNextEligibleDate());
+                continue;
+            }
+            
+            // 3. Campaign reached closureCount=2 but user hasn't responded yet
+            //    (This should be rare since modal forces response)
+            if (closure.getClosureCount() >= 2 && 
+                closure.getClosureReason() == null &&  // No response given yet
+                closure.getPermanentlyClosed() == null &&  // Not decided yet
+                closure.getNextEligibleDate() == null) {  // No wait period set
+                
+                temporarilyClosedCampaignIds.add(closure.getCampaignId());
+                log.debug("Campaign {} blocked - waiting for user response (count={})", 
+                         closure.getCampaignId(), closure.getClosureCount());
+                continue;
+            }
+            
+            // ✅ All other cases: Campaign is ELIGIBLE
+            // This includes:
+            // - closureCount < 2 (normal eligibility)
+            // - closureCount >= 2 but user said "show later" (closureReason set, permanent=false, nextEligible=null)
+            log.debug("Campaign {} is ELIGIBLE - count={}", closure.getCampaignId(), closure.getClosureCount());
         }
         
-        log.debug("Found {} temporarily closed campaigns for user {} at date {}: {}", 
+        log.debug("Found {} blocked campaigns for user {} at date {}: {}", 
                  temporarilyClosedCampaignIds.size(), userId, checkDate, temporarilyClosedCampaignIds);
         
         return temporarilyClosedCampaignIds;
