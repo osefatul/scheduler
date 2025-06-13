@@ -98,7 +98,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         }).unwrap();
 
         console.log('Global preference set: User wants future campaigns after 1-month wait period');
-        recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE');
+        recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE_SESSION');
         setSuccessMessage("You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period.");
 
       } else {
