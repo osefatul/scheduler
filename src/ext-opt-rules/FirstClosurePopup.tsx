@@ -140,19 +140,15 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
     }
   }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure]);
 
-  // SUCCESS POPUP CLOSES EVERYTHING AND HIDES BANNER
+  // SUCCESS POPUP CLOSES EVERYTHING 
   const handleSuccessPopupClose = useCallback(() => {
+    console.log('Success popup closing - banner should already be hidden');
     setSuccessPopupOpen(false);
     
-    // CRITICAL: Force refresh of session closure state
-    if (onPreferenceComplete) {
-      console.log('Calling onPreferenceComplete to hide banner after success popup');
-      onPreferenceComplete();
-    }
-    
-    // Close the main modal
+    // Close the main modal - banner should already be hidden
+    console.log('Closing first closure modal');
     handleClose();
-  }, [handleClose, onPreferenceComplete]);
+  }, [handleClose]);
 
   const handleDontShowAgainPopupClose = useCallback(() => {
     setDontShowAgainPopupOpen(false);
