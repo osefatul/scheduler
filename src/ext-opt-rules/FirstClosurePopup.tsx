@@ -67,7 +67,8 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       
       // CRITICAL: Record as TEMPORARY_CLOSE for current session (banner should hide)
       recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE_SESSION');
-
+      
+      // CRITICAL: Immediately notify parent to hide banner
       if (onPreferenceComplete) {
         onPreferenceComplete();
       }
@@ -82,7 +83,7 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
     } finally {
       setIsProcessing(false);
     }
-  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure]);
+  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure, onPreferenceComplete]);
 
   // Handle "Don't show again" click - open reasons modal
   const handleDontShowAgainClick = useCallback(() => {
@@ -132,6 +133,11 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       // Update session - campaign is permanently blocked
       recordClosure(campaignId, userId, companyId, closureCount, 'PERMANENT_BLOCK');
       
+      // CRITICAL: Immediately notify parent to hide banner
+      if (onPreferenceComplete) {
+        onPreferenceComplete();
+      }
+      
       setSuccessMessage("We won't show you this banner again.");
       setSuccessPopupOpen(true);
     } catch (error) {
@@ -142,14 +148,14 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
     } finally {
       setIsProcessing(false);
     }
-  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure]);
+  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure, onPreferenceComplete]);
 
   // SUCCESS POPUP CLOSES EVERYTHING 
   const handleSuccessPopupClose = useCallback(() => {
-    console.log('Success popup closing - banner should already be hidden');
+    console.log('Success popup closing');
     setSuccessPopupOpen(false);
     
-    // Close the main modal - banner should already be hidden
+    // Close the main modal
     console.log('Closing first closure modal');
     handleClose();
   }, [handleClose]);

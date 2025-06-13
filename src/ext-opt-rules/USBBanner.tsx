@@ -69,7 +69,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
     // API and session management hooks
     const [closeInsight, { isLoading: isClosingInsight }] = useCloseInsightMutation();
-    const { isCampaignClosed, recordClosure, hasUserMadePreferenceChoice } = useSessionClosureManager();
+    const { isCampaignClosed, recordClosure, hasUserMadePreferenceChoice, sessionClosures, isFirstClosureEver } = useSessionClosureManager();
 
     // Check if banner should be hidden on mount
     useEffect(() => {
@@ -148,11 +148,10 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
       console.log('Close icon clicked, calling closure API...');
 
-      // CRITICAL: Check if user previously made a preference choice
-      const userMadeChoice = campaignId && userId && companyId ? 
-        hasUserMadePreferenceChoice(campaignId, userId, companyId) : false;
+      // CRITICAL: Check if this is the very first closure ever
+      const isVeryFirstClosure = isFirstClosureEver(campaignId, userId, companyId);
 
-      console.log('User previously made preference choice:', userMadeChoice);
+      console.log('Is very first closure ever:', isVeryFirstClosure);
 
       // Call closure API first - DON'T hide banner yet
       const closureResponse = await handleClosureAPI();
@@ -165,44 +164,19 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
       console.log('Closure API response:', closureResponse);
 
-      // CORRECTED LOGIC:
-      // If user previously chose "show later", ALWAYS show modal regardless of closure count
-      // Otherwise, follow normal first-time logic
-      // Check if this is a second+ closure situation by looking at the API response
-      const isSecondClosure = closureResponse.closureCount >= 2;
-
-      if (userMadeChoice) {
-        console.log('User previously chose "show later" - showing modal');
-        // User has made preference choice before - show appropriate modal
-        if (closureResponse.isGlobalPrompt || closureResponse.action === 'PROMPT_GLOBAL_PREFERENCE') {
-          setIsSecondModalOpen(true);
-        } else {
-          setIsFirstModalOpen(true);
-        }
-        setIsHidden(false);
-      } 
+      // CRITICAL LOGIC:
+      // - First time ever (no previous closures in any session): Hide immediately
+      // - Any subsequent time (2nd session onwards): Show modal
       
-      // else if (closureResponse.closureCount === 1) {
-      //   console.log('FIRST closure ever - hiding banner without modal');
-      //   // First closure: just hide banner, no modal yet
-      //   setIsHidden(true);
-      //   // Record as first closure
-      //   recordClosure(campaignId, userId, companyId, 1, 'FIRST_CLOSURE_HIDE');
-      //   return;
-      // } else if (closureResponse.closureCount >= 2) {
-      //   console.log('Second+ closure - showing appropriate modal');
-      //   // Second+ closure - show appropriate modal
-      //   if (closureResponse.isGlobalPrompt || closureResponse.action === 'PROMPT_GLOBAL_PREFERENCE') {
-      //     setIsSecondModalOpen(true);
-      //   } else {
-      //     setIsFirstModalOpen(true);
-      //   }
-      //   setIsHidden(false);
-      // }
-
-      if (closureResponse.closureCount === 1 && closureResponse.action === 'RECORDED_FIRST_CLOSURE') {
-        console.log('FIRST closure - hiding banner without modal');
-        // First closure: just hide banner, no modal
+      console.log('Closure decision:', {
+        closureCount: closureResponse.closureCount,
+        isVeryFirstClosure,
+        action: closureResponse.action
+      });
+      
+      if (closureResponse.closureCount === 1 && isVeryFirstClosure) {
+        console.log('VERY FIRST closure ever - hiding banner without modal');
+        // First closure ever: just hide banner, no modal
         setIsHidden(true);
         // Record as first closure
         recordClosure(campaignId, userId, companyId, 1, 'FIRST_CLOSURE_HIDE');
@@ -211,19 +185,22 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           onBannerClosed(campaignId, 1);
         }
         return;
-      } else if (isSecondClosure || closureResponse.requiresUserInput) {
-        console.log('Second+ closure - showing appropriate modal');
-        // Second+ closure or requires user input - show appropriate modal
-        if (closureResponse.isGlobalPrompt || closureResponse.action === 'PROMPT_GLOBAL_PREFERENCE') {
+      } else {
+        console.log('Not first closure - showing modal');
+        // Any closure after the first time - always show first modal
+        // (unless it's a special case where second modal is needed)
+        if (closureResponse.closureCount >= 2 && 
+            (closureResponse.isGlobalPrompt || closureResponse.action === 'PROMPT_GLOBAL_PREFERENCE')) {
           setIsSecondModalOpen(true);
         } else {
+          // For all other cases (including repeat closures in new sessions), show first modal
           setIsFirstModalOpen(true);
         }
         // Keep banner visible while modal is open
         setIsHidden(false);
       }
 
-    }, [isClosingInsight, handleClosureAPI, campaignId, userId, companyId, recordClosure, hasUserMadePreferenceChoice]);
+    }, [isClosingInsight, handleClosureAPI, campaignId, userId, companyId, recordClosure, isFirstClosureEver]);
 
     // Handle banner closure callback - called when user completes preference flow
     const handleBannerClosureComplete = useCallback(() => {

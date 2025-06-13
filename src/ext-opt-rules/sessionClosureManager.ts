@@ -70,7 +70,7 @@ class SessionClosureManager {
     
     // Remove any existing closure for this campaign in this session
     const filteredClosures = closures.filter(
-      c => !(c.campaignId === campaignId && c.userId === userId && c.companyId === companyId)
+      c => !(c.campaignId === campaignId && c.userId === userId && c.companyId === companyId && c.sessionId === sessionId)
     );
     
     // Add new closure record
@@ -107,7 +107,7 @@ class SessionClosureManager {
     
     // CORRECTED LOGIC: 
     // - FIRST_CLOSURE_HIDE = first time close (hide for current session only)
-    // - USER_CHOSE_SHOW_LATER = user made preference choice (hide for current session but show modal next time)
+    // - TEMPORARY_CLOSE_SESSION = user chose "close & show later" (hide for current session)
     // - PERMANENT_BLOCK = user said "don't show again" (hide permanently)
     // - GLOBAL_OPT_OUT = user opted out globally (hide permanently)
     const sessionHideActions = [
@@ -192,6 +192,23 @@ class SessionClosureManager {
       c.sessionId === sessionId
     );
   }
+
+  /**
+   * Check if this is the very first closure ever across all sessions
+   */
+  isFirstClosureEver(campaignId: string, userId: string, companyId: string): boolean {
+    // Get ALL closures across all sessions from storage
+    const allClosures = this.getSessionClosures();
+    
+    // Check if there are any previous closures for this campaign/user/company combination
+    const hasPreviousClosures = allClosures.some(
+      c => c.campaignId === campaignId && 
+           c.userId === userId && 
+           c.companyId === companyId
+    );
+    
+    return !hasPreviousClosures;
+  }
 }
 
 // Export singleton instance
@@ -238,11 +255,20 @@ export const useSessionClosureManager = () => {
     return sessionClosureManager.hasUserMadePreferenceChoice(campaignId, userId, companyId);
   }, []);
 
+  const isFirstClosureEver = useCallback((
+    campaignId: string,
+    userId: string,
+    companyId: string
+  ) => {
+    return sessionClosureManager.isFirstClosureEver(campaignId, userId, companyId);
+  }, []);
+
   return {
     sessionClosures,
     recordClosure,
     isCampaignClosed,
     hasUserMadePreferenceChoice,
+    isFirstClosureEver,
     refreshClosures,
     clearSessionClosures: sessionClosureManager.clearSessionClosures.bind(sessionClosureManager),
     hasUserClosures: (userId: string, companyId: string) => 
