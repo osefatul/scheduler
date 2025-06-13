@@ -171,54 +171,66 @@ return response;
      */
     @Transactional
     public void handlePreferenceResponse(String userId, String companyId, String campaignId,
-            boolean wantsToSee, String reason, boolean isGlobalResponse, Date effectiveDate) 
-            throws DataHandlingException {
-        
-        log.info("Handling preference response for user: {}, campaign: {}, wantsToSee: {}, isGlobal: {} at date: {}", 
-                userId, campaignId, wantsToSee, isGlobalResponse, effectiveDate);
-        
-        if (isGlobalResponse) {
-            // This is response to "see future insights?" prompt
-            if (wantsToSee) {
-                // User wants to see future insights - set 1-month wait for THIS campaign only
-                log.info("User wants future insights. Setting 1-month wait for campaign {}", campaignId);
-                setOneMonthWaitForCampaign(userId, companyId, campaignId, reason, effectiveDate);
-            } else {
-                // User doesn't want future insights - GLOBAL OPT-OUT
-                log.info("User doesn't want future insights. Global opt-out for user {}", userId);
-                handleGlobalOptOut(userId, reason, effectiveDate);
-            }
+        boolean wantsToSee, String reason, boolean isGlobalResponse, Date effectiveDate) 
+        throws DataHandlingException {
+    
+    log.info("Handling preference response for user: {}, campaign: {}, wantsToSee: {}, isGlobal: {} at date: {}", 
+            userId, campaignId, wantsToSee, isGlobalResponse, effectiveDate);
+    
+    if (isGlobalResponse) {
+        // This is response to "see future insights?" prompt
+        if (wantsToSee) {
+            // User wants to see future insights - set 1-month wait for THIS campaign only
+            log.info("User wants future insights. Setting 1-month wait for campaign {}", campaignId);
+            setOneMonthWaitForCampaign(userId, companyId, campaignId, reason, effectiveDate);
         } else {
-            // This is response to "see this campaign again?" prompt
-            UserInsightClosure closure = closureRepository
-                    .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
-                    .orElseThrow(() -> new DataHandlingException(HttpStatus.NOT_FOUND.toString(),
-                            "No closure record found"));
-            
-            if (wantsToSee) {
-                // User wants to see THIS campaign again - reset to eligible
-                log.info("User wants to see campaign {} again. Resetting to eligible.", campaignId);
-                closure.setClosureCount(0);
-                closure.setPermanentlyClosed(false);
-                closure.setNextEligibleDate(null);
-                closure.setClosureReason(null);
-            } else {
-                // User doesn't want THIS campaign - set 1-month wait and permanent block
-                log.info("User doesn't want campaign {}. Setting permanent block with 1-month wait.", campaignId);
-                closure.setClosureReason(reason);
-                
-                Calendar cal = Calendar.getInstance();
-                cal.setTime(effectiveDate);
-                cal.add(Calendar.MONTH, 1);
-                closure.setNextEligibleDate(cal.getTime());
-                
-                log.info("Campaign {} permanently blocked with wait until: {}", campaignId, closure.getNextEligibleDate());
-            }
-            
-            closure.setUpdatedDate(effectiveDate);
-            closureRepository.save(closure);
+            // User doesn't want future insights - GLOBAL OPT-OUT
+            log.info("User doesn't want future insights. Global opt-out for user {}", userId);
+            handleGlobalOptOut(userId, reason, effectiveDate);
         }
+    } else {
+        // This is response to "see this campaign again?" prompt
+        UserInsightClosure closure = closureRepository
+                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
+                .orElseThrow(() -> new DataHandlingException(HttpStatus.NOT_FOUND.toString(),
+                        "No closure record found"));
+        
+        // CRITICAL FIX: DO NOT RESET CLOSURE COUNT
+        // Keep the existing closure count (should be 2 at this point)
+        log.info("BEFORE preference handling - closureCount: {}", closure.getClosureCount());
+        
+        if (wantsToSee) {
+            // User wants to see THIS campaign again - mark as eligible but keep closure count
+            log.info("User wants to see campaign {} again. Marking as eligible but keeping closure count.", campaignId);
+            
+            // DO NOT reset closure count to 0 - this was the bug!
+            // closure.setClosureCount(0); // REMOVE THIS LINE
+            
+            closure.setPermanentlyClosed(false);
+            closure.setNextEligibleDate(null);
+            closure.setClosureReason(null);
+            
+        } else {
+            // User doesn't want THIS campaign - set permanent block
+            log.info("User doesn't want campaign {}. Setting permanent block.", campaignId);
+            closure.setClosureReason(reason);
+            closure.setPermanentlyClosed(true);
+            
+            // Optional: Set wait period for permanent blocks
+            Calendar cal = Calendar.getInstance();
+            cal.setTime(effectiveDate);
+            cal.add(Calendar.MONTH, 1);
+            closure.setNextEligibleDate(cal.getTime());
+            
+            log.info("Campaign {} permanently blocked", campaignId);
+        }
+        
+        closure.setUpdatedDate(effectiveDate);
+        closureRepository.save(closure);
+        
+        log.info("AFTER preference handling - closureCount: {}", closure.getClosureCount());
     }
+}
     
     /**
      * Set 1-month wait for a specific campaign

@@ -148,7 +148,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     
       console.log('Close icon clicked, calling closure API...');
     
-      // Call closure API first - DON'T hide banner yet
+      // Call closure API first
       const closureResponse = await handleClosureAPI();
       
       if (!closureResponse) {
@@ -158,26 +158,25 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     
       console.log('Closure API response:', closureResponse);
     
-      // TRUST THE BACKEND RESPONSE - Remove frontend session checks
-      if (closureResponse.action === "RECORDED_FIRST_CLOSURE" && 
-          closureResponse.requiresUserInput === false) {
+      // NEW LOGIC: Use closure count and action from backend
+      if (closureResponse.closureCount === 1 && 
+          closureResponse.action === "RECORDED_FIRST_CLOSURE") {
         
-        console.log('Backend says this is first closure ever - hiding banner immediately');
-        // This is truly the first closure ever according to backend database
+        console.log('TRUE FIRST CLOSURE - hiding banner immediately');
+        // This is the very first closure according to backend database
         setIsHidden(true);
+        recordClosure(campaignId, userId, companyId, 1, 'FIRST_CLOSURE_HIDE');
         
-        // Record in session for current session tracking
-        recordClosure(campaignId, userId, companyId, closureResponse.closureCount, 'FIRST_CLOSURE_HIDE');
-        
-        // Notify parent
         if (onBannerClosed && campaignId) {
-          onBannerClosed(campaignId, closureResponse.closureCount);
+          onBannerClosed(campaignId, 1);
         }
         
-      } else {
-        console.log('Backend says show modal - requiresUserInput:', closureResponse.requiresUserInput);
+      } else if (closureResponse.closureCount >= 2 || 
+                 closureResponse.requiresUserInput === true) {
         
-        // Any other case - show appropriate modal based on backend response
+        console.log('CLOSURE COUNT >= 2 OR REQUIRES INPUT - showing modal');
+        // Second closure or subsequent - show appropriate modal
+        
         if (closureResponse.isGlobalPrompt === true) {
           console.log('Showing second modal for global preference');
           setIsSecondModalOpen(true);
@@ -186,7 +185,13 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           setIsFirstModalOpen(true);
         }
         
-        // Keep banner visible while modal is open
+        setIsHidden(false); // Keep banner visible while modal is open
+        
+      } else {
+        
+        console.log('UNEXPECTED CASE - showing first modal as fallback');
+        // Fallback - show first modal for any unexpected case
+        setIsFirstModalOpen(true);
         setIsHidden(false);
       }
     
