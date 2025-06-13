@@ -68,22 +68,50 @@ export const createBanner = (
         // Check if user has globally opted out
         const isGloballyOptedOut = optOutResponse?.success && optOutResponse?.data === true;
         
+        console.log(`Banner visibility check for ${campaign.campaignId}:`, {
+          isClosedInSession,
+          isGloballyOptedOut,
+          currentBannerHidden: bannerHidden
+        });
+        
         if (isClosedInSession || isGloballyOptedOut) {
-          console.log(`Banner ${campaign.campaignId} hidden - closed in session: ${isClosedInSession}, globally opted out: ${isGloballyOptedOut}`);
+          console.log(`Banner ${campaign.campaignId} should be hidden - closed in session: ${isClosedInSession}, globally opted out: ${isGloballyOptedOut}`);
           setBannerHidden(true);
         } else {
+          console.log(`Banner ${campaign.campaignId} should be visible`);
           setBannerHidden(false);
         }
       }
-    }, [campaign?.campaignId, userId, companyId, isCampaignClosed, optOutResponse]);
+    }, [campaign?.campaignId, userId, companyId, isCampaignClosed, optOutResponse, bannerHidden]);
+
+    // ADDITIONAL: Force re-check when session closures change
+    const { sessionClosures } = useSessionClosureManager();
+    useEffect(() => {
+      if (campaign?.campaignId && userId && companyId) {
+        const isClosedInSession = isCampaignClosed(campaign.campaignId, userId, companyId);
+        if (isClosedInSession && !bannerHidden) {
+          console.log(`Session closure detected for ${campaign.campaignId} - hiding banner`);
+          setBannerHidden(true);
+        }
+      }
+    }, [sessionClosures, campaign?.campaignId, userId, companyId, isCampaignClosed, bannerHidden]);
 
     // Handle banner closure callback - ONLY called when user COMPLETES preference flow
     const handleBannerClosed = useCallback((campaignId: string, closureCount: number) => {
       console.log(`Banner ${campaignId} COMPLETED closure flow with count ${closureCount} - hiding from parent`);
       setBannerHidden(true);
       
+      // CRITICAL: Also check session state to force hide
+      if (userId && companyId) {
+        const isClosedInSession = isCampaignClosed(campaignId, userId, companyId);
+        console.log(`Banner ${campaignId} session closed status after preference:`, isClosedInSession);
+        if (isClosedInSession) {
+          setBannerHidden(true);
+        }
+      }
+      
       // Additional logic can be added here for analytics, etc.
-    }, []);
+    }, [isCampaignClosed, userId, companyId]);
 
     const primaryButtonProps: ButtonProps = {
       label: "Get Started",
@@ -165,7 +193,7 @@ export const createBanner = (
       <ExternalPortalContainer>
         <ExternalPortalBannerContainer>
           {renderBannerContent()}
-        </ExternalPortalBannerContainer>
+        </ExternalPortalContainer>
       </ExternalPortalContainer>
     );
   };
@@ -209,7 +237,7 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
   );
 
   // Session closure management
-  const { hasUserClosures, isCampaignClosed } = useSessionClosureManager();
+  const { hasUserClosures, isCampaignClosed, sessionClosures } = useSessionClosureManager();
 
   // NEW: Set session active and store campaign data when API call succeeds
   useEffect(() => {
