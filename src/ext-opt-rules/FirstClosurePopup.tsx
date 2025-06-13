@@ -44,9 +44,6 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
   const handleCloseAndShowLater = useCallback(async () => {
     if (!campaignId || !userId || !companyId) {
       console.error('Missing required parameters for preference API');
-      // Still show success popup for UX
-      setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
-      setSuccessPopupOpen(true);
       return;
     }
 
@@ -57,18 +54,17 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         userId,
         companyId,
         campaignId,
-        wantsToSee: true, // User wants to see this campaign again
+        wantsToSee: true,           // ✅ User WANTS to see this campaign again
         reason: "User chose to close temporarily",
-        isGlobalResponse: false, // This is campaign-specific
+        isGlobalResponse: false,    // ✅ This is campaign-specific, not global
         preferenceDate: new Date().toISOString().split('T')[0]
       }).unwrap();
 
       console.log('Preference set: Close & show later');
       
-      // CRITICAL: Record as TEMPORARY_CLOSE for current session (banner should hide)
+      // Record as temporary close for current session
       recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE_SESSION');
       
-      // CRITICAL: Immediately notify parent to hide banner
       if (onPreferenceComplete) {
         onPreferenceComplete();
       }
@@ -77,9 +73,6 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       setSuccessPopupOpen(true);
     } catch (error) {
       console.error('Error setting preference:', error);
-      // Show success popup anyway for UX
-      setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
-      setSuccessPopupOpen(true);
     } finally {
       setIsProcessing(false);
     }
