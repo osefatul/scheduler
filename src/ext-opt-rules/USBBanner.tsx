@@ -205,11 +205,17 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
       setIsFirstModalOpen(false);
       setIsSecondModalOpen(false);
       
+      // Force a re-check of session closure state
+      if (campaignId && userId && companyId) {
+        const isClosedNow = isCampaignClosed(campaignId, userId, companyId);
+        console.log('Banner closure complete - session closed status:', isClosedNow);
+      }
+      
       // Notify parent component
       if (onBannerClosed && campaignId) {
         onBannerClosed(campaignId, closureCount);
       }
-    }, [onBannerClosed, campaignId, closureCount]);
+    }, [onBannerClosed, campaignId, closureCount, isCampaignClosed, userId, companyId]);
 
     // Handle modal closures - Banner only hides when user completes the preference flow
     const handleFirstModalClose = useCallback(() => {

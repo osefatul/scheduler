@@ -143,10 +143,13 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
   // SUCCESS POPUP CLOSES EVERYTHING AND HIDES BANNER
   const handleSuccessPopupClose = useCallback(() => {
     setSuccessPopupOpen(false);
-    // When success popup closes, call the preference complete callback to hide banner
+    
+    // CRITICAL: Force refresh of session closure state
     if (onPreferenceComplete) {
+      console.log('Calling onPreferenceComplete to hide banner after success popup');
       onPreferenceComplete();
     }
+    
     // Close the main modal
     handleClose();
   }, [handleClose, onPreferenceComplete]);
