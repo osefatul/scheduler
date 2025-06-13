@@ -85,35 +85,35 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
       const reason = selectedReason || additionalComments || "User provided feedback";
 
       if (modalType === 'campaign') {
-        // "Close now but show in future" - User wants to see future campaigns
-        // This should trigger 1-month wait period for THIS campaign but allow future campaigns
+        // "Close now but show in future" - User WANTS to see future campaigns
+        // But remove current campaign and set 1-month wait period
         await setClosurePreference({
           userId,
           companyId,
           campaignId,
-          wantsToSee: false, // Don't want THIS campaign for now
+          wantsToSee: true, // YES - User WANTS to see future campaigns
           reason,
-          isGlobalResponse: true, // This affects global campaign eligibility  
+          isGlobalResponse: true, // YES - This affects global campaign eligibility  
           preferenceDate: new Date().toISOString().split('T')[0]
         }).unwrap();
 
-        console.log('Global preference set: Allow future campaigns after wait period');
+        console.log('Global preference set: User wants future campaigns after 1-month wait period');
         recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE');
-        setSuccessMessage("You won't see this campaign for 1 month. Future campaigns may still be shown.");
+        setSuccessMessage("You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period.");
 
       } else {
-        // "Stop showing this ad" - Global opt-out
+        // "Stop showing this ad" - Global opt-out from all campaigns
         await setClosurePreference({
           userId,
           companyId,
           campaignId,
-          wantsToSee: false, // User doesn't want future insights
+          wantsToSee: false, // User doesn't want any future insights
           reason,
-          isGlobalResponse: true, // This triggers global opt-out
+          isGlobalResponse: true, // This triggers complete global opt-out
           preferenceDate: new Date().toISOString().split('T')[0]
         }).unwrap();
 
-        console.log('Global preference set: Opt out of all insights');
+        console.log('Global preference set: Complete opt out of all insights');
         recordClosure(campaignId, userId, companyId, closureCount, 'GLOBAL_OPT_OUT');
         setSuccessMessage("You have been opted out of all future insights and campaigns.");
       }
