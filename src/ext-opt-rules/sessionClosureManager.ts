@@ -112,7 +112,7 @@ class SessionClosureManager {
     // - GLOBAL_OPT_OUT = user opted out globally (hide permanently)
     const sessionHideActions = [
       'FIRST_CLOSURE_HIDE', 
-      'USER_CHOSE_SHOW_LATER', 
+      'TEMPORARY_CLOSE_SESSION',
       'PERMANENT_BLOCK', 
       'GLOBAL_OPT_OUT'
     ];

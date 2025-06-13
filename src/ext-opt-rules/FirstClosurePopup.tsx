@@ -67,6 +67,10 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       
       // CRITICAL: Record as TEMPORARY_CLOSE for current session (banner should hide)
       recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE_SESSION');
+
+      if (onPreferenceComplete) {
+        onPreferenceComplete();
+      }
       
       setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
       setSuccessPopupOpen(true);

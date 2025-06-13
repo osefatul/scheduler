@@ -168,7 +168,9 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
       // CORRECTED LOGIC:
       // If user previously chose "show later", ALWAYS show modal regardless of closure count
       // Otherwise, follow normal first-time logic
-      
+      // Check if this is a second+ closure situation by looking at the API response
+      const isSecondClosure = closureResponse.closureCount >= 2;
+
       if (userMadeChoice) {
         console.log('User previously chose "show later" - showing modal');
         // User has made preference choice before - show appropriate modal
@@ -178,21 +180,46 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           setIsFirstModalOpen(true);
         }
         setIsHidden(false);
-      } else if (closureResponse.closureCount === 1) {
-        console.log('FIRST closure ever - hiding banner without modal');
-        // First closure: just hide banner, no modal yet
+      } 
+      
+      // else if (closureResponse.closureCount === 1) {
+      //   console.log('FIRST closure ever - hiding banner without modal');
+      //   // First closure: just hide banner, no modal yet
+      //   setIsHidden(true);
+      //   // Record as first closure
+      //   recordClosure(campaignId, userId, companyId, 1, 'FIRST_CLOSURE_HIDE');
+      //   return;
+      // } else if (closureResponse.closureCount >= 2) {
+      //   console.log('Second+ closure - showing appropriate modal');
+      //   // Second+ closure - show appropriate modal
+      //   if (closureResponse.isGlobalPrompt || closureResponse.action === 'PROMPT_GLOBAL_PREFERENCE') {
+      //     setIsSecondModalOpen(true);
+      //   } else {
+      //     setIsFirstModalOpen(true);
+      //   }
+      //   setIsHidden(false);
+      // }
+
+      if (closureResponse.closureCount === 1 && closureResponse.action === 'RECORDED_FIRST_CLOSURE') {
+        console.log('FIRST closure - hiding banner without modal');
+        // First closure: just hide banner, no modal
         setIsHidden(true);
         // Record as first closure
         recordClosure(campaignId, userId, companyId, 1, 'FIRST_CLOSURE_HIDE');
+        // Notify parent
+        if (onBannerClosed && campaignId) {
+          onBannerClosed(campaignId, 1);
+        }
         return;
-      } else if (closureResponse.closureCount >= 2) {
+      } else if (isSecondClosure || closureResponse.requiresUserInput) {
         console.log('Second+ closure - showing appropriate modal');
-        // Second+ closure - show appropriate modal
+        // Second+ closure or requires user input - show appropriate modal
         if (closureResponse.isGlobalPrompt || closureResponse.action === 'PROMPT_GLOBAL_PREFERENCE') {
           setIsSecondModalOpen(true);
         } else {
           setIsFirstModalOpen(true);
         }
+        // Keep banner visible while modal is open
         setIsHidden(false);
       }
 
