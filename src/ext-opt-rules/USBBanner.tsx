@@ -12,12 +12,12 @@ import {
   BannerImageContainer,
   BannerImage,
   ActionContainer,
-  BannercloseIcon
+  BannercloseIcon,
 } from "./USBBanner.styled";
 
-import { USBIconClose } from '@usb-shield/react-icons';
-import { useCloseInsightMutation } from './campaignClosureAPI';
-import { useSessionClosureManager } from './sessionClosureManager';
+import { USBIconClose } from "@usb-shield/react-icons";
+import { useCloseInsightMutation } from "./campaignClosureAPI";
+import { useSessionClosureManager } from "./sessionClosureManager";
 
 import SecondInsightBannerpopup from "../bannerpopup/SecondClosurePopup";
 import FirstClosurePopup from "../bannerpopup/FirstClosurePopup";
@@ -61,20 +61,29 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     onBannerClosed,
     ...restProps
   }) => {
-
     const [isFirstModalOpen, setIsFirstModalOpen] = useState(false);
     const [isSecondModalOpen, setIsSecondModalOpen] = useState(false);
     const [isHidden, setIsHidden] = useState(false);
     const [closureCount, setClosureCount] = useState(0);
 
     // API and session management hooks
-    const [closeInsight, { isLoading: isClosingInsight }] = useCloseInsightMutation();
-    const { isCampaignClosed, recordClosure, hasUserMadePreferenceChoice, sessionClosures } = useSessionClosureManager();
+    const [closeInsight, { isLoading: isClosingInsight }] =
+      useCloseInsightMutation();
+    const {
+      isCampaignClosed,
+      recordClosure,
+      hasUserMadePreferenceChoice,
+      sessionClosures,
+    } = useSessionClosureManager();
 
     // Check if banner should be hidden on mount
     useEffect(() => {
       if (campaignId && userId && companyId) {
-        const isClosedInSession = isCampaignClosed(campaignId, userId, companyId);
+        const isClosedInSession = isCampaignClosed(
+          campaignId,
+          userId,
+          companyId
+        );
         if (isClosedInSession) {
           console.log(`Banner ${campaignId} is already closed in this session`);
           setIsHidden(true);
@@ -106,7 +115,11 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     // Handle closure API call
     const handleClosureAPI = useCallback(async () => {
       if (!campaignId || !userId || !companyId) {
-        console.error('Missing required params for closure API:', { campaignId, userId, companyId });
+        console.error("Missing required params for closure API:", {
+          campaignId,
+          userId,
+          companyId,
+        });
         return null;
       }
 
@@ -116,10 +129,10 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           userId,
           companyId,
           campaignId,
-          closureDate: new Date().toISOString().split('T')[0] // YYYY-MM-DD format
+          closureDate: new Date().toISOString().split("T")[0], // YYYY-MM-DD format
         }).unwrap();
 
-        console.log('Closure API response:', response);
+        console.log("Closure API response:", response);
 
         if (response.success && response.data) {
           const closureData = response.data;
@@ -131,13 +144,13 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
             userId,
             companyId,
             closureData.closureCount,
-            closureData.action || 'CLOSURE_RECORDED'
+            closureData.action || "CLOSURE_RECORDED"
           );
 
           return closureData;
         }
       } catch (error) {
-        console.error('Error calling closure API:', error);
+        console.error("Error calling closure API:", error);
         return null;
       }
     }, [campaignId, userId, companyId, closeInsight, recordClosure]);
@@ -145,108 +158,133 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     // Handle close icon click
     const handleCloseIconClick = useCallback(async () => {
       if (isClosingInsight) return; // Prevent multiple clicks
-    
-      console.log('Close icon clicked, calling closure API...');
-    
+
+      console.log("Close icon clicked, calling closure API...");
+
       // Call closure API first
       const closureResponse = await handleClosureAPI();
-      
+
       if (!closureResponse) {
-        console.error('Closure API call failed');
+        console.error("Closure API call failed");
         return;
       }
-    
-      console.log('Closure API response:', closureResponse);
-    
+
+      console.log("Closure API response:", closureResponse);
+
       // NEW LOGIC: Use closure count and action from backend
-      if (closureResponse.closureCount === 1 && 
-          closureResponse.action === "RECORDED_FIRST_CLOSURE") {
-        
-        console.log('TRUE FIRST CLOSURE - hiding banner immediately');
+      if (
+        closureResponse.closureCount === 1 &&
+        closureResponse.action === "RECORDED_FIRST_CLOSURE"
+      ) {
+        console.log("TRUE FIRST CLOSURE - hiding banner immediately");
         // This is the very first closure according to backend database
         setIsHidden(true);
-        recordClosure(campaignId, userId, companyId, 1, 'FIRST_CLOSURE_HIDE');
-        
+        recordClosure(campaignId, userId, companyId, 1, "FIRST_CLOSURE_HIDE");
+
         if (onBannerClosed && campaignId) {
           onBannerClosed(campaignId, 1);
         }
-        
-      } else if (closureResponse.closureCount >= 2 || 
-                 closureResponse.requiresUserInput === true) {
-        
-        console.log('CLOSURE COUNT >= 2 OR REQUIRES INPUT - showing modal');
+      } else if (
+        closureResponse.closureCount >= 2 ||
+        closureResponse.requiresUserInput === true
+      ) {
+        console.log("CLOSURE COUNT >= 2 OR REQUIRES INPUT - showing modal");
         // Second closure or subsequent - show appropriate modal
-        
+
         if (closureResponse.isGlobalPrompt === true) {
-          console.log('Showing second modal for global preference');
+          console.log("Showing second modal for global preference");
           setIsSecondModalOpen(true);
         } else {
-          console.log('Showing first modal for campaign preference');
+          console.log("Showing first modal for campaign preference");
           setIsFirstModalOpen(true);
         }
-        
+
         setIsHidden(false); // Keep banner visible while modal is open
-        
       } else {
-        
-        console.log('UNEXPECTED CASE - showing first modal as fallback');
+        console.log("UNEXPECTED CASE - showing first modal as fallback");
         // Fallback - show first modal for any unexpected case
         setIsFirstModalOpen(true);
         setIsHidden(false);
       }
-    
-    }, [isClosingInsight, handleClosureAPI, campaignId, userId, companyId, recordClosure, onBannerClosed]);
+    }, [
+      isClosingInsight,
+      handleClosureAPI,
+      campaignId,
+      userId,
+      companyId,
+      recordClosure,
+      onBannerClosed,
+    ]);
 
     // Handle banner closure callback - called when user completes preference flow
     const handleBannerClosureComplete = useCallback(() => {
-      console.log('User completed preference flow, hiding banner IMMEDIATELY');
-      
+      console.log(
+        "✅ CRITICAL: User completed preference flow INCLUDING success popup - hiding banner NOW"
+      );
+
       // IMMEDIATE: Hide banner at USBBanner level
       setIsHidden(true);
       setIsFirstModalOpen(false);
       setIsSecondModalOpen(false);
-      
+
       // IMMEDIATE: Force parent to hide banner too
       if (onBannerClosed && campaignId) {
-        console.log('Calling onBannerClosed to hide parent banner');
+        console.log("Calling onBannerClosed to hide parent banner");
         onBannerClosed(campaignId, closureCount);
       }
-      
+
       // Debug session state
       if (campaignId && userId && companyId) {
         setTimeout(() => {
           const isClosedNow = isCampaignClosed(campaignId, userId, companyId);
-          console.log('Session state check after closure:', isClosedNow);
+          console.log("Session state check after closure:", isClosedNow);
         }, 100);
       }
-    }, [onBannerClosed, campaignId, closureCount, isCampaignClosed, userId, companyId]);
+    }, [
+      onBannerClosed,
+      campaignId,
+      closureCount,
+      isCampaignClosed,
+      userId,
+      companyId,
+    ]);
 
-    // Handle modal closures - Banner only hides when user completes the preference flow
+    // Handle modal closures - Banner stays visible until success popup is handled
     const handleFirstModalClose = useCallback(() => {
+      console.log(
+        "First modal closing - banner stays visible (waiting for success popup)"
+      );
       setIsFirstModalOpen(false);
-      // DON'T hide banner here - let the success popup handle banner hiding
-      // Banner stays visible until user completes preference selection
+      // ✅ CRITICAL: Banner stays visible - only success popup completion hides banner
     }, []);
 
     const handleSecondModalClose = useCallback(() => {
+      console.log(
+        "Second modal closing - banner stays visible (waiting for success popup)"
+      );
       setIsSecondModalOpen(false);
-      // DON'T hide banner here - let the success popup handle banner hiding
-      // Banner stays visible until user completes preference selection
+      // ✅ CRITICAL: Banner stays visible - only success popup completion hides banner
     }, []);
 
-    // Don't render if banner should be hidden AND no modals are open
-    if (isHidden && !isFirstModalOpen && !isSecondModalOpen) {
-      console.log('Banner is hidden and no modals open - not rendering');
-      return null;
-    }
-
-    // ALWAYS render banner if any modal is open, regardless of isHidden state
+    // ✅ CRITICAL: Banner visibility logic
     const shouldShowBanner = !isHidden || isFirstModalOpen || isSecondModalOpen;
-    console.log('Banner render decision:', { 
-      isHidden, 
-      isFirstModalOpen, 
-      isSecondModalOpen, 
-      shouldShowBanner 
+
+    // The banner stays visible if:
+    // 1. Not hidden due to closure state, OR
+    // 2. Any modal is open (including during success popup)
+
+    console.log("Banner render decision:", {
+      isHidden,
+      isFirstModalOpen,
+      isSecondModalOpen,
+      shouldShowBanner,
+      reason: !isHidden
+        ? "not hidden"
+        : isFirstModalOpen
+        ? "first modal open"
+        : isSecondModalOpen
+        ? "second modal open"
+        : "should be hidden",
     });
 
     return (
@@ -260,16 +298,16 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
             marginBottom={marginBottom}
             {...restProps}
           >
-            <BannercloseIcon 
+            <BannercloseIcon
               onClick={handleCloseIconClick}
-              style={{ 
-                cursor: isClosingInsight ? 'not-allowed' : 'pointer',
-                opacity: isClosingInsight ? 0.5 : 1
+              style={{
+                cursor: isClosingInsight ? "not-allowed" : "pointer",
+                opacity: isClosingInsight ? 0.5 : 1,
               }}
             >
-              <USBIconClose colorVariant={isMuted ? 'light' : 'default'} />
+              <USBIconClose colorVariant={isMuted ? "light" : "default"} />
             </BannercloseIcon>
-            
+
             <BannerContent>
               <BannerTitle textColor={textColor}>{title}</BannerTitle>
               <BannerMessage textColor={textColor}>{message}</BannerMessage>
@@ -286,7 +324,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
                 )}
               </ButtonContainer>
             </BannerContent>
-            
+
             {bannerImageUrl && (
               <BannerImageContainer>
                 <BannerImage
@@ -296,7 +334,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
                 />
               </BannerImageContainer>
             )}
-            
+
             {showRemoveButton && (
               <ActionContainer onClick={handleRemove}>
                 {removeButton || (

@@ -1,4 +1,5 @@
-// Enhanced SecondClosurePopup.tsx
+// FIXED SecondClosurePopup.tsx
+
 import React, { useState, useCallback } from "react";
 import USBModal, { ModalHeader, ModalBody, ModalFooter } from "@usb-shield/react-modal";
 import Button from "@usb-shield/react-button";
@@ -100,10 +101,8 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         console.log('Global preference set: User wants future campaigns after 1-month wait period');
         recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE_SESSION');
         
-        // CRITICAL: Immediately notify parent to hide banner
-        if (onPreferenceComplete) {
-          onPreferenceComplete();
-        }
+        // ✅ CRITICAL FIX: Do NOT call onPreferenceComplete here
+        // Banner should stay visible until success popup is closed
         
         setSuccessMessage("You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period.");
 
@@ -141,13 +140,17 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
     // Don't close main modal, user can still make other choices
   }, []);
 
-  // SUCCESS POPUP CLOSES EVERYTHING AND HIDES BANNER
+  // ✅ CRITICAL FIX: SUCCESS POPUP CLOSE - This is when banner should disappear
   const handleSuccessPopupClose = useCallback(() => {
+    console.log('Success popup closing - NOW hiding banner');
     setSuccessPopupOpen(false);
-    // When success popup closes, call the preference complete callback to hide banner
+    
+    // ✅ CRITICAL: Only NOW call onPreferenceComplete to hide banner
     if (onPreferenceComplete) {
+      console.log('Calling onPreferenceComplete to hide banner');
       onPreferenceComplete();
     }
+    
     // Close the main modal
     handleClose();
   }, [handleClose, onPreferenceComplete]);
@@ -183,7 +186,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         </USBModal>
       </SecondBannerExternalBannerPopup>
 
-      {/* Success confirmation popup - ONLY closes after this */}
+      {/* ✅ CRITICAL: Success confirmation popup - Banner only hides when this closes */}
       <PopupCloseandShowBanner
         isOpen={isSuccessPopupOpen}
         handleClose={handleSuccessPopupClose}
