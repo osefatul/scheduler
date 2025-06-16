@@ -1,4 +1,4 @@
-// Enhanced Banner.tsx - COMPLETE FIXED VERSION
+// Enhanced Banner.tsx - COMPLETE NEW APPROACH
 import React, { useEffect, useState, useCallback } from "react";
 import {
   ExternalPortalContainer,
@@ -34,11 +34,11 @@ export const createBanner = (
     userId?: string;
     companyId?: string;
   }) => {
-    const [bannerHidden, setBannerHidden] = useState(false);
-    const [forceHide, setForceHide] = useState(false);
+    // SINGLE SOURCE OF TRUTH for banner visibility
+    const [isBannerVisible, setIsBannerVisible] = useState(true);
     
     // Session closure management
-    const { isCampaignClosed, hasUserClosures, sessionClosures } = useSessionClosureManager();
+    const { isCampaignClosed, hasUserClosures } = useSessionClosureManager();
     
     // Check if user has globally opted out
     const { data: optOutResponse } = useCheckOptOutStatusQuery(
@@ -60,7 +60,7 @@ export const createBanner = (
       error: contentError,
     } = useGetBannerByIdQuery(Number(bannerID));
 
-    // Check if banner should be hidden due to closure state
+    // Initial visibility check
     useEffect(() => {
       if (campaign?.campaignId && userId && companyId) {
         // Check if campaign is closed in current session
@@ -69,52 +69,36 @@ export const createBanner = (
         // Check if user has globally opted out
         const isGloballyOptedOut = optOutResponse?.success && optOutResponse?.data === true;
         
-        console.log(`Banner visibility check for ${campaign.campaignId}:`, {
+        console.log(`Initial banner visibility check for ${campaign.campaignId}:`, {
           isClosedInSession,
           isGloballyOptedOut,
-          currentBannerHidden: bannerHidden,
-          forceHide
+          isBannerVisible
         });
         
         if (isClosedInSession || isGloballyOptedOut) {
-          console.log(`Banner ${campaign.campaignId} should be hidden`);
-          setBannerHidden(true);
-          setForceHide(true);
+          console.log(`Banner ${campaign.campaignId} should be hidden initially`);
+          setIsBannerVisible(false);
         }
       }
     }, [campaign?.campaignId, userId, companyId, isCampaignClosed, optOutResponse]);
 
-    // Monitor session changes
+    // Monitor session state changes
+    const { sessionClosures } = useSessionClosureManager();
     useEffect(() => {
       if (campaign?.campaignId && userId && companyId) {
         const isClosedInSession = isCampaignClosed(campaign.campaignId, userId, companyId);
-        if (isClosedInSession && !forceHide) {
-          console.log(`Session closure detected for ${campaign.campaignId} - force hiding banner`);
-          setForceHide(true);
-          setBannerHidden(true);
+        if (isClosedInSession) {
+          console.log(`Session closure detected for ${campaign.campaignId} - hiding banner`);
+          setIsBannerVisible(false);
         }
       }
-    }, [sessionClosures, campaign?.campaignId, userId, companyId, isCampaignClosed, forceHide]);
+    }, [sessionClosures, campaign?.campaignId, userId, companyId, isCampaignClosed]);
 
-    // Handle banner closure callback - CRITICAL FIX
+    // NEW APPROACH: Simple callback that just hides the banner
     const handleBannerClosed = useCallback((campaignId: string, closureCount: number) => {
-      console.log(`✅ CRITICAL: Banner ${campaignId} closure complete - FORCE HIDING NOW`);
-      
-      // IMMEDIATE: Force hide at parent level
-      setForceHide(true);
-      setBannerHidden(true);
-      
-      // Double-check session state
-      setTimeout(() => {
-        if (userId && companyId) {
-          const isClosedInSession = isCampaignClosed(campaignId, userId, companyId);
-          console.log(`Post-closure session check: ${isClosedInSession}`);
-          if (!isClosedInSession) {
-            console.error('WARNING: Session state not updated!');
-          }
-        }
-      }, 100);
-    }, [isCampaignClosed, userId, companyId]);
+      console.log(`Banner ${campaignId} closed with count ${closureCount} - hiding immediately`);
+      setIsBannerVisible(false);
+    }, []);
 
     const primaryButtonProps: ButtonProps = {
       label: "Get Started",
@@ -139,9 +123,9 @@ export const createBanner = (
     };
 
     const renderBannerContent = () => {
-      // CRITICAL: Check both bannerHidden AND forceHide
-      if (bannerHidden || forceHide) {
-        console.log('Banner hidden due to closure state or force hide');
+      // Simple visibility check
+      if (!isBannerVisible) {
+        console.log('Banner hidden');
         return null;
       }
 
@@ -201,3 +185,132 @@ export const createBanner = (
     );
   };
 };
+
+interface BannerProps {
+  onNavigate?: (pathname: string, state?: any) => void;
+  userId?: string | null;
+}
+
+const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const userIdParam = queryParams.get("userId") || userId;
+  const companyIdParam = queryParams.get("companyId");
+  const dateParam = queryParams.get("date");
+
+  // Session management
+  const isDCRSessionActive = sessionStorage.getItem("isDCRSessionActive") === "true";
+  
+  // Campaign session management - Store and retrieve campaign data
+  const { storedCampaign, storeCampaignData, hasStoredCampaignData } = useCampaignSessionManager();
+  
+  // Smart API skipping - skip if session is active AND we have stored campaign
+  const shouldSkipAPI = isDCRSessionActive && hasStoredCampaignData();
+  
+  console.log('Banner render state:', {
+    isDCRSessionActive,
+    hasStoredCampaignData: hasStoredCampaignData(),
+    shouldSkipAPI,
+    storedCampaign
+  });
+  
+  const { data: nextData, error: rotationError } = useRotateCampaignNextQuery(
+    shouldSkipAPI ? null : { 
+      username: userIdParam || "CORY", 
+      company: companyIdParam || "ABCCORP", 
+      date: dateParam || "20250715" 
+    },
+    { skip: shouldSkipAPI }
+  );
+
+  // Session closure management
+  const { hasUserClosures, isCampaignClosed, sessionClosures } = useSessionClosureManager();
+
+  // Set session active and store campaign data when API call succeeds
+  useEffect(() => {
+    if (!isDCRSessionActive && nextData?.success && nextData.data) {
+      console.log("API called successfully. Setting session to active and storing campaign data.");
+      sessionStorage.setItem("isDCRSessionActive", "true");
+      storeCampaignData(nextData.data);
+    } else if (isDCRSessionActive && hasStoredCampaignData()) {
+      console.log("DCR session is already active and has stored campaign data. API call skipped.");
+    } else if (isDCRSessionActive) {
+      console.log("DCR session is active but no stored campaign data found.");
+    }
+  }, [isDCRSessionActive, nextData, storeCampaignData, hasStoredCampaignData]);
+
+  // Debug: Log closure state
+  useEffect(() => {
+    if (userIdParam && companyIdParam) {
+      const hasClosures = hasUserClosures(userIdParam, companyIdParam);
+      console.log(`User ${userIdParam} has closures in session:`, hasClosures);
+    }
+  }, [userIdParam, companyIdParam, hasUserClosures]);
+
+  // Handle rotation errors
+  if (rotationError) {
+    console.error('Campaign rotation error:', rotationError);
+    return null;
+  }
+
+  // Determine which campaign data to use - fresh API or stored session data
+  let campaignToShow = null;
+  
+  if (nextData?.success === true && nextData.data) {
+    // Fresh API response - use this data
+    campaignToShow = nextData.data;
+    console.log('Using fresh campaign data from API:', campaignToShow);
+  } else if (isDCRSessionActive && storedCampaign) {
+    // Use stored campaign data for same session
+    campaignToShow = {
+      campaignId: storedCampaign.campaignId,
+      id: storedCampaign.campaignId,
+      bannerId: storedCampaign.bannerId,
+      insightSubType: storedCampaign.insightSubType,
+      insightType: storedCampaign.insightType,
+      name: storedCampaign.name
+    };
+    console.log('Using stored campaign data from session:', campaignToShow);
+  }
+
+  // Check if campaign should be hidden due to session closures
+  if (campaignToShow && userIdParam && companyIdParam) {
+    const isClosedInSession = isCampaignClosed(campaignToShow.campaignId || campaignToShow.id, userIdParam, companyIdParam);
+    
+    if (isClosedInSession) {
+      console.log(`Campaign ${campaignToShow.campaignId || campaignToShow.id} is closed in this session, not showing banner`);
+      return null;
+    }
+  }
+
+  // Render banner if we have campaign data
+  if (campaignToShow) {
+    const BannerComponent = createBanner(campaignToShow);
+
+    return (
+      <BannerComponent 
+        bannerID={campaignToShow.bannerId} 
+        onNavigate={onNavigate}
+        userId={userIdParam}
+        companyId={companyIdParam}
+      />
+    );
+  }
+
+  // If rotation API returned success: false, don't show banner
+  if (nextData?.success === false) {
+    console.log('Campaign rotation returned no eligible campaigns:', nextData.message);
+    return null;
+  }
+
+  // Loading state or no data yet
+  if (!isDCRSessionActive) {
+    console.log('Waiting for campaign rotation API response...');
+  } else if (!hasStoredCampaignData()) {
+    console.log('Session is active but no stored campaign data available');
+  }
+  
+  return null;
+};
+
+export default Banner;

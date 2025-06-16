@@ -1,5 +1,5 @@
-// Enhanced USBBanner.tsx - COMPLETE FIXED VERSION
-import React, { useState, useEffect, useCallback } from "react";
+// Enhanced USBBanner.tsx - COMPLETE NEW APPROACH
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { BannerProps } from "./IUSBBanner";
 import {
   getBannerImageWidth,
@@ -63,23 +63,27 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
   }) => {
     const [isFirstModalOpen, setIsFirstModalOpen] = useState(false);
     const [isSecondModalOpen, setIsSecondModalOpen] = useState(false);
-    const [isHidden, setIsHidden] = useState(false);
     const [closureCount, setClosureCount] = useState(0);
+    const [isWaitingForUserAction, setIsWaitingForUserAction] = useState(false);
+    const [shouldHideBanner, setShouldHideBanner] = useState(false);
+
+    // Use ref to track if we've already processed the closure
+    const hasProcessedClosure = useRef(false);
 
     // API and session management hooks
     const [closeInsight, { isLoading: isClosingInsight }] = useCloseInsightMutation();
     const { isCampaignClosed, recordClosure, sessionClosures } = useSessionClosureManager();
 
-    // Check if banner should be hidden on mount and when session changes
+    // Check if banner should be hidden on mount
     useEffect(() => {
       if (campaignId && userId && companyId) {
         const isClosedInSession = isCampaignClosed(campaignId, userId, companyId);
         if (isClosedInSession) {
-          console.log(`USBBanner: Campaign ${campaignId} is closed in session, hiding banner`);
-          setIsHidden(true);
+          console.log(`USBBanner: Campaign ${campaignId} is already closed in session`);
+          setShouldHideBanner(true);
         }
       }
-    }, [campaignId, userId, companyId, isCampaignClosed, sessionClosures]);
+    }, [campaignId, userId, companyId, isCampaignClosed]);
 
     // Extract color information
     const backgroundColor = bannerBackgroundColor?.split(":")?.[1]?.trim() || "#ffffff";
@@ -141,15 +145,17 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
     // Handle close icon click
     const handleCloseIconClick = useCallback(async () => {
-      if (isClosingInsight) return;
+      if (isClosingInsight || hasProcessedClosure.current) return;
 
       console.log("Close icon clicked, calling closure API...");
+      hasProcessedClosure.current = true;
 
       // Call closure API first
       const closureResponse = await handleClosureAPI();
 
       if (!closureResponse) {
         console.error("Closure API call failed");
+        hasProcessedClosure.current = false;
         return;
       }
 
@@ -158,14 +164,14 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
       // Handle based on closure count and action
       if (closureResponse.closureCount === 1 && closureResponse.action === "RECORDED_FIRST_CLOSURE") {
         console.log("FIRST CLOSURE - hiding banner immediately");
-        setIsHidden(true);
-        recordClosure(campaignId, userId, companyId, 1, "FIRST_CLOSURE_HIDE");
-
+        setShouldHideBanner(true);
+        
         if (onBannerClosed && campaignId) {
           onBannerClosed(campaignId, 1);
         }
       } else if (closureResponse.closureCount >= 2 || closureResponse.requiresUserInput === true) {
         console.log("SUBSEQUENT CLOSURE - showing modal");
+        setIsWaitingForUserAction(true);
         
         if (closureResponse.isGlobalPrompt === true) {
           setIsSecondModalOpen(true);
@@ -173,20 +179,19 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           setIsFirstModalOpen(true);
         }
       }
-    }, [isClosingInsight, handleClosureAPI, campaignId, userId, companyId, recordClosure, onBannerClosed]);
+    }, [isClosingInsight, handleClosureAPI, campaignId, onBannerClosed]);
 
-    // CRITICAL FIX: Handle banner closure completion
-    const handleBannerClosureComplete = useCallback(() => {
-      console.log("✅ CRITICAL: Preference flow complete - HIDING BANNER NOW");
+    // Handle preference completion
+    const handlePreferenceComplete = useCallback(() => {
+      console.log("✅ User completed entire preference flow - hiding banner");
       
-      // IMMEDIATE: Hide banner
-      setIsHidden(true);
-      setIsFirstModalOpen(false);
-      setIsSecondModalOpen(false);
+      // Hide banner
+      setShouldHideBanner(true);
+      setIsWaitingForUserAction(false);
+      hasProcessedClosure.current = false;
       
-      // IMMEDIATE: Notify parent to hide
+      // Notify parent
       if (onBannerClosed && campaignId) {
-        console.log("Notifying parent to hide banner");
         onBannerClosed(campaignId, closureCount);
       }
     }, [onBannerClosed, campaignId, closureCount]);
@@ -195,15 +200,25 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     const handleFirstModalClose = useCallback(() => {
       console.log("First modal closing");
       setIsFirstModalOpen(false);
-    }, []);
+      // Reset flag if user just closes modal without completing preference
+      if (!shouldHideBanner) {
+        hasProcessedClosure.current = false;
+        setIsWaitingForUserAction(false);
+      }
+    }, [shouldHideBanner]);
 
     const handleSecondModalClose = useCallback(() => {
       console.log("Second modal closing");
       setIsSecondModalOpen(false);
-    }, []);
+      // Reset flag if user just closes modal without completing preference
+      if (!shouldHideBanner) {
+        hasProcessedClosure.current = false;
+        setIsWaitingForUserAction(false);
+      }
+    }, [shouldHideBanner]);
 
-    // CRITICAL FIX: Simplify visibility logic
-    if (isHidden) {
+    // Don't render if banner should be hidden
+    if (shouldHideBanner) {
       console.log('USBBanner is hidden');
       return null;
     }
@@ -221,8 +236,8 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           <BannercloseIcon
             onClick={handleCloseIconClick}
             style={{
-              cursor: isClosingInsight ? "not-allowed" : "pointer",
-              opacity: isClosingInsight ? 0.5 : 1,
+              cursor: isClosingInsight || isWaitingForUserAction ? "not-allowed" : "pointer",
+              opacity: isClosingInsight || isWaitingForUserAction ? 0.5 : 1,
             }}
           >
             <USBIconClose colorVariant={isMuted ? "light" : "default"} />
@@ -284,7 +299,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           userId={userId}
           companyId={companyId}
           closureCount={closureCount}
-          onPreferenceComplete={handleBannerClosureComplete}
+          onPreferenceComplete={handlePreferenceComplete}
         />
 
         <SecondInsightBannerpopup
@@ -294,7 +309,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           userId={userId}
           companyId={companyId}
           closureCount={closureCount}
-          onPreferenceComplete={handleBannerClosureComplete}
+          onPreferenceComplete={handlePreferenceComplete}
         />
       </>
     );

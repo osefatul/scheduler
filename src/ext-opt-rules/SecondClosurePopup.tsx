@@ -1,4 +1,5 @@
-import React, { useState, useCallback } from "react";
+// FIXED SecondClosurePopup.tsx - NEW APPROACH
+import React, { useState, useCallback, useRef } from "react";
 import USBModal, { ModalHeader, ModalBody, ModalFooter } from "@usb-shield/react-modal";
 import Button from "@usb-shield/react-button";
 import { businessOptions, dontShowAgainOptions } from "./BannerselectOptions";
@@ -36,7 +37,9 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   const [modalType, setModalType] = useState<'campaign' | 'global'>('campaign');
   const [isProcessing, setIsProcessing] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
-  const [pendingClose, setPendingClose] = useState(false);
+  
+  // Track if we should trigger onPreferenceComplete after success popup closes
+  const shouldCompleteOnSuccessClose = useRef(false);
 
   // API hooks
   const [setClosurePreference] = useSetClosurePreferenceMutation();
@@ -57,18 +60,26 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
     setSharedModalOpen(true);
   }, []);
 
-  // Handle SharedModal onSubmit
+  // Handle SharedModal onSubmit (called after onProceed)
   const handleSharedModalOnSubmit = useCallback(async () => {
-    console.log('SharedModal complete - showing success popup');
+    console.log('SharedModal complete - closing and showing success');
     setSharedModalOpen(false);
-    setSuccessPopupOpen(true);
-    setPendingClose(true);
-  }, []);
+    
+    // Close the main modal
+    handleClose();
+    
+    // Show success popup
+    setTimeout(() => {
+      setSuccessPopupOpen(true);
+      shouldCompleteOnSuccessClose.current = true;
+    }, 100);
+  }, [handleClose]);
 
   // Handle SharedModal onProceed
   const handleSharedModalSubmit = useCallback(async (selectedReason: string | null, additionalComments: string) => {
     if (!campaignId || !userId || !companyId) {
       console.error('Missing required parameters');
+      setSuccessMessage("Your preference has been updated.");
       return;
     }
 
@@ -111,35 +122,31 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         setSuccessMessage("You have been opted out of all future insights and campaigns.");
       }
 
-      // Close the second modal
-      handleClose();
-
     } catch (error) {
       console.error('Error setting preference:', error);
-      handleClose();
       setSuccessMessage("Your preference has been updated.");
     } finally {
       setIsProcessing(false);
     }
-  }, [campaignId, userId, companyId, closureCount, modalType, setClosurePreference, recordClosure, handleClose]);
+  }, [campaignId, userId, companyId, closureCount, modalType, setClosurePreference, recordClosure]);
 
+  // Handle SharedModal close
   const handleSharedModalClose = useCallback(() => {
     setSharedModalOpen(false);
   }, []);
 
-  // CRITICAL: Handle success popup close
+  // Handle success popup close
   const handleSuccessPopupClose = useCallback(() => {
-    console.log('✅ Success popup closing - NOW calling onPreferenceComplete');
+    console.log('Success popup closing');
     setSuccessPopupOpen(false);
     
-    // CRITICAL: Only hide banner after user clicks OK
-    if (pendingClose && onPreferenceComplete) {
-      console.log('Calling onPreferenceComplete to hide banner');
+    // Check if we should complete the preference flow
+    if (shouldCompleteOnSuccessClose.current && onPreferenceComplete) {
+      console.log('✅ Calling onPreferenceComplete to hide banner');
       onPreferenceComplete();
+      shouldCompleteOnSuccessClose.current = false;
     }
-    
-    setPendingClose(false);
-  }, [pendingClose, onPreferenceComplete]);
+  }, [onPreferenceComplete]);
 
   return (
     <>
