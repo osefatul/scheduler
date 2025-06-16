@@ -1,5 +1,3 @@
-// FIXED SecondClosurePopup.tsx
-
 import React, { useState, useCallback } from "react";
 import USBModal, { ModalHeader, ModalBody, ModalFooter } from "@usb-shield/react-modal";
 import Button from "@usb-shield/react-button";
@@ -54,14 +52,12 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   // Handle "Stop showing this ad" - could be campaign-specific or global
   const handleStopShowingAd = useCallback(() => {
     setSharedModalOptions(dontShowAgainOptions);
-    setModalType('global'); // This leads to global opt-out question
+    setModalType('global');
     setSharedModalOpen(true);
   }, []);
 
-  // Handle submission from shared modal via onSubmit (no arguments)
+  // Handle submission from shared modal via onSubmit
   const handleSharedModalOnSubmit = useCallback(async () => {
-    // onSubmit is called after onProceed, so the API call is already done
-    // Close the SharedModal and show success popup
     console.log('SharedModal onSubmit called - closing SharedModal and showing success popup');
     setSharedModalOpen(false);
     
@@ -86,35 +82,31 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
       const reason = selectedReason || additionalComments || "User provided feedback";
 
       if (modalType === 'campaign') {
-        // "Close now but show in future" - User WANTS to see future campaigns
-        // But remove current campaign and set 1-month wait period
+        // "Close now but show in future"
         await setClosurePreference({
           userId,
           companyId,
           campaignId,
-          wantsToSee: true, // YES - User WANTS to see future campaigns
+          wantsToSee: true,
           reason,
-          isGlobalResponse: true, // YES - This affects global campaign eligibility  
+          isGlobalResponse: true,
           preferenceDate: new Date().toISOString().split('T')[0]
         }).unwrap();
 
         console.log('Global preference set: User wants future campaigns after 1-month wait period');
         recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE_SESSION');
         
-        // ✅ CRITICAL FIX: Do NOT call onPreferenceComplete here
-        // Banner should stay visible until success popup is closed
-        
         setSuccessMessage("You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period.");
 
       } else {
-        // "Stop showing this ad" - Global opt-out from all campaigns
+        // "Stop showing this ad" - Global opt-out
         await setClosurePreference({
           userId,
           companyId,
           campaignId,
-          wantsToSee: false, // User doesn't want any future insights
+          wantsToSee: false,
           reason,
-          isGlobalResponse: true, // This triggers complete global opt-out
+          isGlobalResponse: true,
           preferenceDate: new Date().toISOString().split('T')[0]
         }).unwrap();
 
@@ -123,37 +115,37 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         setSuccessMessage("You have been opted out of all future insights and campaigns.");
       }
 
-      setSuccessPopupOpen(true);
+      // Close the second modal
+      handleClose();
+
+      // Success popup will be shown by onSubmit callback
 
     } catch (error) {
       console.error('Error setting preference:', error);
-      // Show success popup anyway for UX
+      handleClose();
       setSuccessMessage("Your preference has been updated.");
-      setSuccessPopupOpen(true);
+      // Success popup will be shown by onSubmit callback
     } finally {
       setIsProcessing(false);
     }
-  }, [campaignId, userId, companyId, closureCount, modalType, setClosurePreference, recordClosure]);
+  }, [campaignId, userId, companyId, closureCount, modalType, setClosurePreference, recordClosure, handleClose]);
 
   const handleSharedModalClose = useCallback(() => {
     setSharedModalOpen(false);
     // Don't close main modal, user can still make other choices
   }, []);
 
-  // ✅ CRITICAL FIX: SUCCESS POPUP CLOSE - This is when banner should disappear
+  // Handle success popup close - This is when banner should disappear
   const handleSuccessPopupClose = useCallback(() => {
     console.log('Success popup closing - NOW hiding banner');
     setSuccessPopupOpen(false);
     
-    // ✅ CRITICAL: Only NOW call onPreferenceComplete to hide banner
+    // Only NOW call onPreferenceComplete to hide banner
     if (onPreferenceComplete) {
       console.log('Calling onPreferenceComplete to hide banner');
       onPreferenceComplete();
     }
-    
-    // Close the main modal
-    handleClose();
-  }, [handleClose, onPreferenceComplete]);
+  }, [onPreferenceComplete]);
 
   return (
     <>
@@ -186,7 +178,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         </USBModal>
       </SecondBannerExternalBannerPopup>
 
-      {/* ✅ CRITICAL: Success confirmation popup - Banner only hides when this closes */}
+      {/* Success confirmation popup - Banner only hides when this closes */}
       <PopupCloseandShowBanner
         isOpen={isSuccessPopupOpen}
         handleClose={handleSuccessPopupClose}

@@ -1,5 +1,3 @@
-// FIXED FirstClosurePopup.tsx
-
 import React, { useState, useCallback } from "react";
 import USBModal, { ModalHeader, ModalBody, ModalFooter } from "@usb-shield/react-modal";
 import Button from "@usb-shield/react-button";
@@ -45,7 +43,6 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
   const handleCloseAndShowLater = useCallback(async () => {
     if (!campaignId || !userId || !companyId) {
       console.error('Missing required parameters for preference API');
-      // Still show success popup for UX
       setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
       setSuccessPopupOpen(true);
       return;
@@ -58,41 +55,40 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         userId,
         companyId,
         campaignId,
-        wantsToSee: true, // User wants to see this campaign again
+        wantsToSee: true,
         reason: "User chose to close temporarily",
-        isGlobalResponse: false, // This is campaign-specific
+        isGlobalResponse: false,
         preferenceDate: new Date().toISOString().split('T')[0]
       }).unwrap();
 
       console.log('Preference set: Close & show later');
       
-      // Record as TEMPORARY_CLOSE for current session (banner should hide)
+      // Record as TEMPORARY_CLOSE for current session
       recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE_SESSION');
       
-      // ✅ CRITICAL FIX: Do NOT call onPreferenceComplete here
-      // Banner should stay visible until success popup is closed
+      // Close the first modal first
+      handleClose();
       
+      // Show success message
       setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
       setSuccessPopupOpen(true);
     } catch (error) {
       console.error('Error setting preference:', error);
-      // Show success popup anyway for UX
+      handleClose();
       setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
       setSuccessPopupOpen(true);
     } finally {
       setIsProcessing(false);
     }
-  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure]);
+  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure, handleClose]);
 
   // Handle "Don't show again" click - open reasons modal
   const handleDontShowAgainClick = useCallback(() => {
     setDontShowAgainPopupOpen(true);
   }, []);
 
-  // Handle submission from "Don't show again" modal via onSubmit (no arguments)
+  // Handle submission from "Don't show again" modal via onSubmit
   const handleDontShowAgainOnSubmit = useCallback(async () => {
-    // onSubmit is called after onProceed, so the API call is already done
-    // Close the SharedModal and show success popup
     console.log('SharedModal onSubmit called - closing SharedModal and showing success popup');
     setDontShowAgainPopupOpen(false);
     
@@ -121,9 +117,9 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         userId,
         companyId,
         campaignId,
-        wantsToSee: false, // User doesn't want to see this campaign for 1 month
+        wantsToSee: false,
         reason,
-        isGlobalResponse: false, // This is campaign-specific
+        isGlobalResponse: false,
         preferenceDate: new Date().toISOString().split('T')[0]
       }).unwrap();
 
@@ -132,36 +128,32 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       // Update session - campaign is blocked for 1 month
       recordClosure(campaignId, userId, companyId, closureCount, 'ONE_MONTH_WAIT');
       
-      // ✅ CRITICAL FIX: Do NOT call onPreferenceComplete here
-      // Banner should stay visible until success popup is closed
+      // Close the first modal
+      handleClose();
       
       setSuccessMessage("We won't show you this banner again for 1 month.");
-      setSuccessPopupOpen(true);
+      // Success popup will be shown by onSubmit callback
     } catch (error) {
       console.error('Error setting preference:', error);
-      // Show success popup anyway for UX
+      handleClose();
       setSuccessMessage("We won't show you this banner again for 1 month.");
-      setSuccessPopupOpen(true);
+      // Success popup will be shown by onSubmit callback
     } finally {
       setIsProcessing(false);
     }
-  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure]);
+  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure, handleClose]);
 
-  // ✅ CRITICAL FIX: SUCCESS POPUP CLOSE - This is when banner should disappear
+  // Handle success popup close - This is when banner should disappear
   const handleSuccessPopupClose = useCallback(() => {
     console.log('Success popup closing - NOW hiding banner');
     setSuccessPopupOpen(false);
     
-    // ✅ CRITICAL: Only NOW call onPreferenceComplete to hide banner
+    // Only NOW call onPreferenceComplete to hide banner
     if (onPreferenceComplete) {
       console.log('Calling onPreferenceComplete to hide banner');
       onPreferenceComplete();
     }
-    
-    // Close the main modal
-    console.log('Closing first closure modal');
-    handleClose();
-  }, [handleClose, onPreferenceComplete]);
+  }, [onPreferenceComplete]);
 
   const handleDontShowAgainPopupClose = useCallback(() => {
     setDontShowAgainPopupOpen(false);
@@ -199,7 +191,7 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         </USBModal>
       </ExternalBannerPopup>
 
-      {/* ✅ CRITICAL: Success confirmation popup - Banner only hides when this closes */}
+      {/* Success confirmation popup - Banner only hides when this closes */}
       <PopupCloseandShowBanner
         isOpen={isSuccessPopupOpen}
         handleClose={handleSuccessPopupClose}

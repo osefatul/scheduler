@@ -218,21 +218,19 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
     // Handle banner closure callback - called when user completes preference flow
     const handleBannerClosureComplete = useCallback(() => {
-      console.log(
-        "✅ CRITICAL: User completed preference flow INCLUDING success popup - hiding banner NOW"
-      );
-
+      console.log("✅ User completed preference flow INCLUDING success popup - hiding banner NOW");
+      
       // IMMEDIATE: Hide banner at USBBanner level
       setIsHidden(true);
       setIsFirstModalOpen(false);
       setIsSecondModalOpen(false);
-
+      
       // IMMEDIATE: Force parent to hide banner too
       if (onBannerClosed && campaignId) {
         console.log("Calling onBannerClosed to hide parent banner");
         onBannerClosed(campaignId, closureCount);
       }
-
+      
       // Debug session state
       if (campaignId && userId && companyId) {
         setTimeout(() => {
@@ -240,14 +238,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           console.log("Session state check after closure:", isClosedNow);
         }, 100);
       }
-    }, [
-      onBannerClosed,
-      campaignId,
-      closureCount,
-      isCampaignClosed,
-      userId,
-      companyId,
-    ]);
+    }, [onBannerClosed, campaignId, closureCount, isCampaignClosed, userId, companyId]);
 
     // Handle modal closures - Banner stays visible until success popup is handled
     const handleFirstModalClose = useCallback(() => {
