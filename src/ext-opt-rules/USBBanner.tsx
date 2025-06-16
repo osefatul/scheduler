@@ -1,4 +1,4 @@
-// Enhanced USBBanner.tsx - COMPLETE UPDATED VERSION WITH ALL FIXES
+// Enhanced USBBanner.tsx - COMPLETE FIXED VERSION
 import React, { useState, useEffect, useCallback } from "react";
 import { BannerProps } from "./IUSBBanner";
 import {
@@ -67,39 +67,27 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     const [closureCount, setClosureCount] = useState(0);
 
     // API and session management hooks
-    const [closeInsight, { isLoading: isClosingInsight }] =
-      useCloseInsightMutation();
-    const {
-      isCampaignClosed,
-      recordClosure,
-      hasUserMadePreferenceChoice,
-      sessionClosures,
-    } = useSessionClosureManager();
+    const [closeInsight, { isLoading: isClosingInsight }] = useCloseInsightMutation();
+    const { isCampaignClosed, recordClosure, sessionClosures } = useSessionClosureManager();
 
-    // Check if banner should be hidden on mount
+    // Check if banner should be hidden on mount and when session changes
     useEffect(() => {
       if (campaignId && userId && companyId) {
-        const isClosedInSession = isCampaignClosed(
-          campaignId,
-          userId,
-          companyId
-        );
+        const isClosedInSession = isCampaignClosed(campaignId, userId, companyId);
         if (isClosedInSession) {
-          console.log(`Banner ${campaignId} is already closed in this session`);
+          console.log(`USBBanner: Campaign ${campaignId} is closed in session, hiding banner`);
           setIsHidden(true);
         }
       }
-    }, [campaignId, userId, companyId, isCampaignClosed]);
+    }, [campaignId, userId, companyId, isCampaignClosed, sessionClosures]);
 
     // Extract color information
-    const backgroundColor =
-      bannerBackgroundColor?.split(":")?.[1]?.trim() || "#ffffff";
-    const colorName =
-      bannerBackgroundColor?.split(":")?.[0]?.trim() || "Surface";
+    const backgroundColor = bannerBackgroundColor?.split(":")?.[1]?.trim() || "#ffffff";
+    const colorName = bannerBackgroundColor?.split(":")?.[0]?.trim() || "Surface";
     const textColor = colorName === "Muted" ? "#ffffff" : "#4b5563";
     const isMuted = colorName === "Muted";
 
-    // Calculate image width based on content length and container width
+    // Calculate image width
     const imageWidth = getBannerImageWidth(
       title,
       message,
@@ -115,11 +103,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     // Handle closure API call
     const handleClosureAPI = useCallback(async () => {
       if (!campaignId || !userId || !companyId) {
-        console.error("Missing required params for closure API:", {
-          campaignId,
-          userId,
-          companyId,
-        });
+        console.error("Missing required params for closure API");
         return null;
       }
 
@@ -129,7 +113,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           userId,
           companyId,
           campaignId,
-          closureDate: new Date().toISOString().split("T")[0], // YYYY-MM-DD format
+          closureDate: new Date().toISOString().split("T")[0],
         }).unwrap();
 
         console.log("Closure API response:", response);
@@ -138,7 +122,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           const closureData = response.data;
           setClosureCount(closureData.closureCount);
 
-          // CORRECTED: Always record closure for session tracking
+          // Always record closure for session tracking
           recordClosure(
             campaignId,
             userId,
@@ -157,7 +141,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
 
     // Handle close icon click
     const handleCloseIconClick = useCallback(async () => {
-      if (isClosingInsight) return; // Prevent multiple clicks
+      if (isClosingInsight) return;
 
       console.log("Close icon clicked, calling closure API...");
 
@@ -169,209 +153,149 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
         return;
       }
 
-      console.log("Closure API response:", closureResponse);
+      console.log("Closure response:", closureResponse);
 
-      // NEW LOGIC: Use closure count and action from backend
-      if (
-        closureResponse.closureCount === 1 &&
-        closureResponse.action === "RECORDED_FIRST_CLOSURE"
-      ) {
-        console.log("TRUE FIRST CLOSURE - hiding banner immediately");
-        // This is the very first closure according to backend database
+      // Handle based on closure count and action
+      if (closureResponse.closureCount === 1 && closureResponse.action === "RECORDED_FIRST_CLOSURE") {
+        console.log("FIRST CLOSURE - hiding banner immediately");
         setIsHidden(true);
         recordClosure(campaignId, userId, companyId, 1, "FIRST_CLOSURE_HIDE");
 
         if (onBannerClosed && campaignId) {
           onBannerClosed(campaignId, 1);
         }
-      } else if (
-        closureResponse.closureCount >= 2 ||
-        closureResponse.requiresUserInput === true
-      ) {
-        console.log("CLOSURE COUNT >= 2 OR REQUIRES INPUT - showing modal");
-        // Second closure or subsequent - show appropriate modal
-
+      } else if (closureResponse.closureCount >= 2 || closureResponse.requiresUserInput === true) {
+        console.log("SUBSEQUENT CLOSURE - showing modal");
+        
         if (closureResponse.isGlobalPrompt === true) {
-          console.log("Showing second modal for global preference");
           setIsSecondModalOpen(true);
         } else {
-          console.log("Showing first modal for campaign preference");
           setIsFirstModalOpen(true);
         }
-
-        setIsHidden(false); // Keep banner visible while modal is open
-      } else {
-        console.log("UNEXPECTED CASE - showing first modal as fallback");
-        // Fallback - show first modal for any unexpected case
-        setIsFirstModalOpen(true);
-        setIsHidden(false);
       }
-    }, [
-      isClosingInsight,
-      handleClosureAPI,
-      campaignId,
-      userId,
-      companyId,
-      recordClosure,
-      onBannerClosed,
-    ]);
+    }, [isClosingInsight, handleClosureAPI, campaignId, userId, companyId, recordClosure, onBannerClosed]);
 
-    // Handle banner closure callback - called when user completes preference flow
+    // CRITICAL FIX: Handle banner closure completion
     const handleBannerClosureComplete = useCallback(() => {
-      console.log("✅ User completed preference flow INCLUDING success popup - hiding banner NOW");
+      console.log("✅ CRITICAL: Preference flow complete - HIDING BANNER NOW");
       
-      // IMMEDIATE: Hide banner at USBBanner level
+      // IMMEDIATE: Hide banner
       setIsHidden(true);
       setIsFirstModalOpen(false);
       setIsSecondModalOpen(false);
       
-      // IMMEDIATE: Force parent to hide banner too
+      // IMMEDIATE: Notify parent to hide
       if (onBannerClosed && campaignId) {
-        console.log("Calling onBannerClosed to hide parent banner");
+        console.log("Notifying parent to hide banner");
         onBannerClosed(campaignId, closureCount);
       }
-      
-      // Debug session state
-      if (campaignId && userId && companyId) {
-        setTimeout(() => {
-          const isClosedNow = isCampaignClosed(campaignId, userId, companyId);
-          console.log("Session state check after closure:", isClosedNow);
-        }, 100);
-      }
-    }, [onBannerClosed, campaignId, closureCount, isCampaignClosed, userId, companyId]);
+    }, [onBannerClosed, campaignId, closureCount]);
 
-    // Handle modal closures - Banner stays visible until success popup is handled
+    // Handle modal closures
     const handleFirstModalClose = useCallback(() => {
-      console.log(
-        "First modal closing - banner stays visible (waiting for success popup)"
-      );
+      console.log("First modal closing");
       setIsFirstModalOpen(false);
-      // ✅ CRITICAL: Banner stays visible - only success popup completion hides banner
     }, []);
 
     const handleSecondModalClose = useCallback(() => {
-      console.log(
-        "Second modal closing - banner stays visible (waiting for success popup)"
-      );
+      console.log("Second modal closing");
       setIsSecondModalOpen(false);
-      // ✅ CRITICAL: Banner stays visible - only success popup completion hides banner
     }, []);
 
-    // ✅ CRITICAL: Banner visibility logic
-    const shouldShowBanner = !isHidden || isFirstModalOpen || isSecondModalOpen;
-
-    // The banner stays visible if:
-    // 1. Not hidden due to closure state, OR
-    // 2. Any modal is open (including during success popup)
-
-    console.log("Banner render decision:", {
-      isHidden,
-      isFirstModalOpen,
-      isSecondModalOpen,
-      shouldShowBanner,
-      reason: !isHidden
-        ? "not hidden"
-        : isFirstModalOpen
-        ? "first modal open"
-        : isSecondModalOpen
-        ? "second modal open"
-        : "should be hidden",
-    });
+    // CRITICAL FIX: Simplify visibility logic
+    if (isHidden) {
+      console.log('USBBanner is hidden');
+      return null;
+    }
 
     return (
       <>
-        {shouldShowBanner && (
-          <BannerContainer
-            width={width}
-            maxWidth={maxWidth}
-            height={height}
-            backgroundColor={backgroundColor}
-            marginBottom={marginBottom}
-            {...restProps}
+        <BannerContainer
+          width={width}
+          maxWidth={maxWidth}
+          height={height}
+          backgroundColor={backgroundColor}
+          marginBottom={marginBottom}
+          {...restProps}
+        >
+          <BannercloseIcon
+            onClick={handleCloseIconClick}
+            style={{
+              cursor: isClosingInsight ? "not-allowed" : "pointer",
+              opacity: isClosingInsight ? 0.5 : 1,
+            }}
           >
-            <BannercloseIcon
-              onClick={handleCloseIconClick}
-              style={{
-                cursor: isClosingInsight ? "not-allowed" : "pointer",
-                opacity: isClosingInsight ? 0.5 : 1,
-              }}
-            >
-              <USBIconClose colorVariant={isMuted ? "light" : "default"} />
-            </BannercloseIcon>
+            <USBIconClose colorVariant={isMuted ? "light" : "default"} />
+          </BannercloseIcon>
 
-            <BannerContent>
-              <BannerTitle textColor={textColor}>{title}</BannerTitle>
-              <BannerMessage textColor={textColor}>{message}</BannerMessage>
-              <ButtonContainer>
-                {showButton && secondaryButtonProps && (
-                  <StyledUSBButtonSecondary
-                    ctaStyle={secondaryButtonProps.ctaStyle}
-                    emphasis={secondaryButtonProps.emphasis}
-                    handleClick={secondaryButtonProps.onClick}
-                    isMuted={isMuted}
-                  >
-                    {secondaryButtonProps.label}
-                  </StyledUSBButtonSecondary>
-                )}
-              </ButtonContainer>
-            </BannerContent>
+          <BannerContent>
+            <BannerTitle textColor={textColor}>{title}</BannerTitle>
+            <BannerMessage textColor={textColor}>{message}</BannerMessage>
+            <ButtonContainer>
+              {showButton && secondaryButtonProps && (
+                <StyledUSBButtonSecondary
+                  ctaStyle={secondaryButtonProps.ctaStyle}
+                  emphasis={secondaryButtonProps.emphasis}
+                  handleClick={secondaryButtonProps.onClick}
+                  isMuted={isMuted}
+                >
+                  {secondaryButtonProps.label}
+                </StyledUSBButtonSecondary>
+              )}
+            </ButtonContainer>
+          </BannerContent>
 
-            {bannerImageUrl && (
-              <BannerImageContainer>
-                <BannerImage
-                  src={bannerImageUrl}
-                  alt={title || "Banner"}
-                  maxWidth={imageWidth}
-                />
-              </BannerImageContainer>
-            )}
+          {bannerImageUrl && (
+            <BannerImageContainer>
+              <BannerImage
+                src={bannerImageUrl}
+                alt={title || "Banner"}
+                maxWidth={imageWidth}
+              />
+            </BannerImageContainer>
+          )}
 
-            {showRemoveButton && (
-              <ActionContainer onClick={handleRemove}>
-                {removeButton || (
-                  <svg
-                    className="remove-icon"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      d="M19 6.41L17.59 5L12 10.59L6.41 5L5 6.41L10.59 12L5 17.59L6.41 19L12 13.41L17.59 19L19 17.59L13.41 12L19 6.41Z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                )}
-              </ActionContainer>
-            )}
-          </BannerContainer>
-        )}
+          {showRemoveButton && (
+            <ActionContainer onClick={handleRemove}>
+              {removeButton || (
+                <svg
+                  className="remove-icon"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M19 6.41L17.59 5L12 10.59L6.41 5L5 6.41L10.59 12L5 17.59L6.41 19L12 13.41L17.59 19L19 17.59L13.41 12L19 6.41Z"
+                    fill="currentColor"
+                  />
+                </svg>
+              )}
+            </ActionContainer>
+          )}
+        </BannerContainer>
 
         {/* Modals */}
-        {isFirstModalOpen && (
-          <FirstClosurePopup
-            isOpen={isFirstModalOpen}
-            handleClose={handleFirstModalClose}
-            campaignId={campaignId}
-            userId={userId}
-            companyId={companyId}
-            closureCount={closureCount}
-            onPreferenceComplete={handleBannerClosureComplete}
-          />
-        )}
+        <FirstClosurePopup
+          isOpen={isFirstModalOpen}
+          handleClose={handleFirstModalClose}
+          campaignId={campaignId}
+          userId={userId}
+          companyId={companyId}
+          closureCount={closureCount}
+          onPreferenceComplete={handleBannerClosureComplete}
+        />
 
-        {isSecondModalOpen && (
-          <SecondInsightBannerpopup
-            isOpen={isSecondModalOpen}
-            handleClose={handleSecondModalClose}
-            campaignId={campaignId}
-            userId={userId}
-            companyId={companyId}
-            closureCount={closureCount}
-            onPreferenceComplete={handleBannerClosureComplete}
-          />
-        )}
+        <SecondInsightBannerpopup
+          isOpen={isSecondModalOpen}
+          handleClose={handleSecondModalClose}
+          campaignId={campaignId}
+          userId={userId}
+          companyId={companyId}
+          closureCount={closureCount}
+          onPreferenceComplete={handleBannerClosureComplete}
+        />
       </>
     );
   };
