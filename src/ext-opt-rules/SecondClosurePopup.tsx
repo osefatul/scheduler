@@ -87,31 +87,26 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   }, []);
 
   const handleCloseButShowInFuture = useCallback(async () => {
+    console.log('SecondClosurePopup: User clicked "Close now but show in future"');
     setSharedModalOptions(businessOptions);
     setModalType("campaign");
     setSharedModalOpen(true);
+    console.log('SecondClosurePopup: Set modalType to "campaign"');
   }, []);
 
   const handleStopShowingAd = useCallback(() => {
+    console.log('SecondClosurePopup: User clicked "Stop showing this ad"');
     setSharedModalOptions(dontShowAgainOptions);
     setModalType("global");
     setSharedModalOpen(true);
+    console.log('SecondClosurePopup: Set modalType to "global"');
   }, []);
 
   const handleSharedModalOnSubmit = useCallback(async () => {
-    setSharedModalOpen(false);
-    
-    // Close banner and main modal immediately
-    if (onPreferenceComplete) {
-      onPreferenceComplete();
-    }
-    handleClose();
-    
-    // Show success popup after closing banner using global state
-    setTimeout(() => {
-      showGlobalSuccessPopup("Your preference has been updated.");
-    }, 150);
-  }, [onPreferenceComplete, handleClose, showGlobalSuccessPopup]);
+    // This is called when user submits without selecting a specific reason
+    // Just call handleSharedModalSubmit with null reason
+    await handleSharedModalSubmit(null, "");
+  }, [handleSharedModalSubmit]);
 
   const handleSharedModalSubmit = useCallback(
     async (selectedReason: string | null, additionalComments: string) => {
@@ -126,7 +121,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         handleClose();
         
         setTimeout(() => {
-          showGlobalSuccessPopup("Your preference has been updated. updated");
+          showGlobalSuccessPopup("We won't show you any banners anymore.");
         }, 150);
         return;
       }
@@ -159,6 +154,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
           );
 
           successMessage = "You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period.";
+          console.log('SecondClosurePopup: Campaign type - setting message:', successMessage);
         } else {
           await setClosurePreference({
             userId,
@@ -180,6 +176,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
           
           // FIXED: Correct message for global opt-out
           successMessage = "We won't show you any banners anymore.";
+          console.log('SecondClosurePopup: Global type - setting message:', successMessage);
         }
 
         // Close banner and modals IMMEDIATELY after API success
@@ -190,6 +187,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         handleClose();
         
         // Show success popup using global state
+        console.log('SecondClosurePopup: About to show popup with message:', successMessage);
         setTimeout(() => {
           showGlobalSuccessPopup(successMessage);
         }, 150);
@@ -223,6 +221,12 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
       showGlobalSuccessPopup,
     ]
   );
+
+  const handleSharedModalOnSubmit = useCallback(async () => {
+    // This is called when user submits without selecting a specific reason
+    // Call the main submit function with empty parameters
+    await handleSharedModalSubmit(null, "");
+  }, [handleSharedModalSubmit]);
 
   const handleSharedModalClose = useCallback(() => {
     setSharedModalOpen(false);
