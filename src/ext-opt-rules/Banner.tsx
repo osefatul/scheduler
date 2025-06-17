@@ -1,4 +1,3 @@
-// Enhanced Banner.tsx - COMPLETE NEW APPROACH
 import React, { useEffect, useState, useCallback } from "react";
 import {
   ExternalPortalContainer,
@@ -11,18 +10,17 @@ import { ButtonProps } from "./IBanner";
 import { useRotateCampaignNextQuery } from "@/external/services/campaignAPI";
 import { useGetBannerByIdQuery } from "@/external/services/bannerAPI";
 import { useLocation } from "react-router-dom";
-import { useSessionClosureManager } from './sessionClosureManager';
-import { useCampaignSessionManager } from './campaignSessionManager';
-import { useCheckOptOutStatusQuery } from './campaignClosureAPI';
+import { useCheckOptOutStatusQuery } from "@/external/services/campaignClosureAPI";
+import { useCampaignSessionManager } from "@/external/utils/campaignSessionManager";
+import { useSessionClosureManager } from "@/external/utils/sessionClosureManager";
+import { GlobalSuccessPopup } from "../usb-banner/bannerpopup/FirstClosurePopup";
 
-export const createBanner = (
-  campaign?: { 
-    insightSubType?: string; 
-    campaignId?: string;
-    id?: string;
-    bannerId?: string;
-  }
-) => {
+export const createBanner = (campaign?: {
+  insightSubType?: string;
+  campaignId?: string;
+  id?: string;
+  bannerId?: string;
+}) => {
   return ({
     bannerID,
     onNavigate,
@@ -34,17 +32,15 @@ export const createBanner = (
     userId?: string;
     companyId?: string;
   }) => {
-    // SINGLE SOURCE OF TRUTH for banner visibility
-    const [isBannerVisible, setIsBannerVisible] = useState(true);
-    
+    const [bannerHidden, setBannerHidden] = useState(false);
+
     // Session closure management
-    const { isCampaignClosed, hasUserClosures } = useSessionClosureManager();
-    
+    const { isCampaignClosed } = useSessionClosureManager();
+
     // Check if user has globally opted out
-    const { data: optOutResponse } = useCheckOptOutStatusQuery(
-      userId || "", 
-      { skip: !userId }
-    );
+    const { data: optOutResponse } = useCheckOptOutStatusQuery(userId || "", {
+      skip: !userId,
+    });
 
     const navigate = (path: string, state?: any) => {
       if (onNavigate) {
@@ -60,45 +56,75 @@ export const createBanner = (
       error: contentError,
     } = useGetBannerByIdQuery(Number(bannerID));
 
-    // Initial visibility check
+    // Check if banner should be hidden due to closure state
     useEffect(() => {
       if (campaign?.campaignId && userId && companyId) {
         // Check if campaign is closed in current session
-        const isClosedInSession = isCampaignClosed(campaign.campaignId, userId, companyId);
-        
+        const isClosedInSession = isCampaignClosed(
+          campaign.campaignId,
+          userId,
+          companyId
+        );
+
         // Check if user has globally opted out
-        const isGloballyOptedOut = optOutResponse?.success && optOutResponse?.data === true;
-        
-        console.log(`Initial banner visibility check for ${campaign.campaignId}:`, {
-          isClosedInSession,
-          isGloballyOptedOut,
-          isBannerVisible
-        });
-        
+        const isGloballyOptedOut =
+          optOutResponse?.success && optOutResponse?.data === true;
+
         if (isClosedInSession || isGloballyOptedOut) {
-          console.log(`Banner ${campaign.campaignId} should be hidden initially`);
-          setIsBannerVisible(false);
+          setBannerHidden(true);
+        } else {
+          setBannerHidden(false);
         }
       }
-    }, [campaign?.campaignId, userId, companyId, isCampaignClosed, optOutResponse]);
+    }, [
+      campaign?.campaignId,
+      userId,
+      companyId,
+      isCampaignClosed,
+      optOutResponse,
+      bannerHidden,
+    ]);
 
-    // Monitor session state changes
     const { sessionClosures } = useSessionClosureManager();
     useEffect(() => {
       if (campaign?.campaignId && userId && companyId) {
-        const isClosedInSession = isCampaignClosed(campaign.campaignId, userId, companyId);
-        if (isClosedInSession) {
-          console.log(`Session closure detected for ${campaign.campaignId} - hiding banner`);
-          setIsBannerVisible(false);
+        const isClosedInSession = isCampaignClosed(
+          campaign.campaignId,
+          userId,
+          companyId
+        );
+        if (isClosedInSession && !bannerHidden) {
+          setBannerHidden(true);
         }
       }
-    }, [sessionClosures, campaign?.campaignId, userId, companyId, isCampaignClosed]);
+    }, [
+      sessionClosures,
+      campaign?.campaignId,
+      userId,
+      companyId,
+      isCampaignClosed,
+      bannerHidden,
+    ]);
 
-    // NEW APPROACH: Simple callback that just hides the banner
-    const handleBannerClosed = useCallback((campaignId: string, closureCount: number) => {
-      console.log(`Banner ${campaignId} closed with count ${closureCount} - hiding immediately`);
-      setIsBannerVisible(false);
-    }, []);
+    // Handle banner closure callback - ONLY called when user COMPLETES preference flow
+    const handleBannerClosed = useCallback(
+      (campaignId: string) => {
+        setBannerHidden(true);
+
+        // Also check session state to force hide
+        if (userId && companyId) {
+          const isClosedInSession = isCampaignClosed(
+            campaignId,
+            userId,
+            companyId
+          );
+          if (isClosedInSession) {
+            setBannerHidden(true);
+          }
+        }
+      },
+      [isCampaignClosed, userId, companyId]
+    );
 
     const primaryButtonProps: ButtonProps = {
       label: "Get Started",
@@ -112,20 +138,22 @@ export const createBanner = (
       emphasis: "subtle",
       ctaStyle: "standard",
       onClick: () => {
-        console.log("Secondary button clicked", campaign?.insightSubType, campaign?.campaignId);
-        navigate("/learn-more", {
+        if (!campaign?.insightSubType) {
+          console.error("No product name available!");
+          return;
+        }
+        const productName = encodeURIComponent(campaign.insightSubType);
+        navigate(`/learn-more?productname=${productName}`, {
           state: {
-            insightSubType: campaign?.insightSubType,
-            campaignId: campaign?.campaignId,
+            insightSubType: campaign.insightSubType,
+            campaignId: campaign.campaignId,
           },
         });
-      }
+      },
     };
 
     const renderBannerContent = () => {
-      // Simple visibility check
-      if (!isBannerVisible) {
-        console.log('Banner hidden');
+      if (bannerHidden) {
         return null;
       }
 
@@ -145,7 +173,12 @@ export const createBanner = (
         );
       }
 
-      if (!BannersResponse && !isContentsListLoading && !contentError && bannerID) {
+      if (
+        !BannersResponse &&
+        !isContentsListLoading &&
+        !contentError &&
+        bannerID
+      ) {
         return (
           <ErrorDisplay>
             <p>No banner content available.</p>
@@ -167,7 +200,6 @@ export const createBanner = (
           primaryButtonProps={primaryButtonProps}
           secondaryButtonProps={secondaryButtonProps}
           showButton={true}
-          // Enhanced props for closure functionality
           campaignId={campaign?.campaignId || campaign?.id}
           userId={userId}
           companyId={companyId}
@@ -177,11 +209,16 @@ export const createBanner = (
     };
 
     return (
-      <ExternalPortalContainer>
-        <ExternalPortalBannerContainer>
-          {renderBannerContent()}
-        </ExternalPortalBannerContainer>
-      </ExternalPortalContainer>
+      <>
+        <ExternalPortalContainer>
+          <ExternalPortalBannerContainer>
+            {renderBannerContent()}
+          </ExternalPortalBannerContainer>
+        </ExternalPortalContainer>
+        
+        {/* Global Success Popup - Renders outside banner hierarchy */}
+        <GlobalSuccessPopup />
+      </>
     );
   };
 };
@@ -198,119 +235,108 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
   const companyIdParam = queryParams.get("companyId");
   const dateParam = queryParams.get("date");
 
-  // Session management
-  const isDCRSessionActive = sessionStorage.getItem("isDCRSessionActive") === "true";
-  
-  // Campaign session management - Store and retrieve campaign data
-  const { storedCampaign, storeCampaignData, hasStoredCampaignData } = useCampaignSessionManager();
-  
-  // Smart API skipping - skip if session is active AND we have stored campaign
+  const isDCRSessionActive =
+    sessionStorage.getItem("isDCRSessionActive") === "true";
+
+  const { storedCampaign, storeCampaignData, hasStoredCampaignData } =
+    useCampaignSessionManager();
   const shouldSkipAPI = isDCRSessionActive && hasStoredCampaignData();
-  
-  console.log('Banner render state:', {
-    isDCRSessionActive,
-    hasStoredCampaignData: hasStoredCampaignData(),
-    shouldSkipAPI,
-    storedCampaign
-  });
-  
+
   const { data: nextData, error: rotationError } = useRotateCampaignNextQuery(
-    shouldSkipAPI ? null : { 
-      username: userIdParam || "CORY", 
-      company: companyIdParam || "ABCCORP", 
-      date: dateParam || "20250715" 
-    },
+    shouldSkipAPI
+      ? null
+      : {
+          username: userIdParam || "CORY",
+          company: companyIdParam || "ABCCORP",
+          date: dateParam || "20250715",
+        },
     { skip: shouldSkipAPI }
   );
 
-  // Session closure management
-  const { hasUserClosures, isCampaignClosed, sessionClosures } = useSessionClosureManager();
+  const { isCampaignClosed } = useSessionClosureManager();
 
-  // Set session active and store campaign data when API call succeeds
   useEffect(() => {
     if (!isDCRSessionActive && nextData?.success && nextData.data) {
-      console.log("API called successfully. Setting session to active and storing campaign data.");
       sessionStorage.setItem("isDCRSessionActive", "true");
       storeCampaignData(nextData.data);
     } else if (isDCRSessionActive && hasStoredCampaignData()) {
-      console.log("DCR session is already active and has stored campaign data. API call skipped.");
     } else if (isDCRSessionActive) {
-      console.log("DCR session is active but no stored campaign data found.");
     }
   }, [isDCRSessionActive, nextData, storeCampaignData, hasStoredCampaignData]);
 
-  // Debug: Log closure state
-  useEffect(() => {
-    if (userIdParam && companyIdParam) {
-      const hasClosures = hasUserClosures(userIdParam, companyIdParam);
-      console.log(`User ${userIdParam} has closures in session:`, hasClosures);
-    }
-  }, [userIdParam, companyIdParam, hasUserClosures]);
-
-  // Handle rotation errors
   if (rotationError) {
-    console.error('Campaign rotation error:', rotationError);
-    return null;
+    return (
+      <>
+        {/* Still render global popup even if no banner */}
+        <GlobalSuccessPopup />
+      </>
+    );
   }
 
-  // Determine which campaign data to use - fresh API or stored session data
   let campaignToShow = null;
-  
+
   if (nextData?.success === true && nextData.data) {
-    // Fresh API response - use this data
     campaignToShow = nextData.data;
-    console.log('Using fresh campaign data from API:', campaignToShow);
   } else if (isDCRSessionActive && storedCampaign) {
-    // Use stored campaign data for same session
     campaignToShow = {
       campaignId: storedCampaign.campaignId,
       id: storedCampaign.campaignId,
       bannerId: storedCampaign.bannerId,
       insightSubType: storedCampaign.insightSubType,
       insightType: storedCampaign.insightType,
-      name: storedCampaign.name
+      name: storedCampaign.name,
     };
-    console.log('Using stored campaign data from session:', campaignToShow);
   }
 
-  // Check if campaign should be hidden due to session closures
   if (campaignToShow && userIdParam && companyIdParam) {
-    const isClosedInSession = isCampaignClosed(campaignToShow.campaignId || campaignToShow.id, userIdParam, companyIdParam);
-    
+    const isClosedInSession = isCampaignClosed(
+      campaignToShow.campaignId || campaignToShow.id,
+      userIdParam,
+      companyIdParam
+    );
+
     if (isClosedInSession) {
-      console.log(`Campaign ${campaignToShow.campaignId || campaignToShow.id} is closed in this session, not showing banner`);
-      return null;
+      return (
+        <>
+          {/* Still render global popup even if banner is closed */}
+          <GlobalSuccessPopup />
+        </>
+      );
     }
   }
 
-  // Render banner if we have campaign data
   if (campaignToShow) {
     const BannerComponent = createBanner(campaignToShow);
 
     return (
-      <BannerComponent 
-        bannerID={campaignToShow.bannerId} 
+      <BannerComponent
+        bannerID={campaignToShow.bannerId}
         onNavigate={onNavigate}
-        userId={userIdParam}
-        companyId={companyIdParam}
+        userId={userIdParam || undefined}
+        companyId={companyIdParam || undefined}
       />
     );
   }
 
-  // If rotation API returned success: false, don't show banner
   if (nextData?.success === false) {
-    console.log('Campaign rotation returned no eligible campaigns:', nextData.message);
-    return null;
+    return (
+      <>
+        {/* Still render global popup even if no campaign */}
+        <GlobalSuccessPopup />
+      </>
+    );
   }
 
-  // Loading state or no data yet
   if (!isDCRSessionActive) {
-    console.log('Waiting for campaign rotation API response...');
   } else if (!hasStoredCampaignData()) {
-    console.log('Session is active but no stored campaign data available');
   }
-  
-  return null;
+
+  return (
+    <>
+      {/* Always render global popup */}
+      <GlobalSuccessPopup />
+    </>
+  );
 };
 
 export default Banner;

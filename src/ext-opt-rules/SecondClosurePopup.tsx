@@ -6,7 +6,6 @@ import USBModal, {
 } from "@usb-shield/react-modal";
 import Button from "@usb-shield/react-button";
 import { businessOptions, dontShowAgainOptions } from "./BannerselectOptions";
-import PopupCloseandShowBanner from "./PopupCloseandShow";
 import SharedModal from "../../../../../packages/shared/src/utils/SharedBannerContent";
 
 import { SecondBannerExternalBannerPopup } from "./SecondInsightBannerPopup.styles";
@@ -24,6 +23,15 @@ interface SecondClosurePopupProps {
   onPreferenceComplete?: () => void;
 }
 
+// Use the same global state as FirstClosurePopup
+declare global {
+  var globalSuccessPopupState: {
+    isOpen: boolean;
+    message: string;
+    onClose: () => void;
+  };
+}
+
 const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   isOpen,
   handleClose,
@@ -33,12 +41,10 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   closureCount = 2,
   onPreferenceComplete,
 }) => {
-  const [isSuccessPopupOpen, setSuccessPopupOpen] = useState(false);
   const [isSharedModalOpen, setSharedModalOpen] = useState(false);
   const [sharedModalOptions, setSharedModalOptions] = useState(businessOptions);
   const [modalType, setModalType] = useState<"campaign" | "global">("campaign");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [successMessage, setSuccessMessage] = useState("");
 
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
@@ -55,6 +61,24 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
 
   const [setClosurePreference] = useSetClosurePreferenceMutation();
   const { recordClosure } = useSessionClosureManager();
+
+  const showGlobalSuccessPopup = useCallback((message: string) => {
+    // Use global state to show success popup outside banner hierarchy
+    if (typeof window !== 'undefined') {
+      if (!window.globalSuccessPopupState) {
+        window.globalSuccessPopupState = {
+          isOpen: false,
+          message: "",
+          onClose: () => {}
+        };
+      }
+      window.globalSuccessPopupState.isOpen = true;
+      window.globalSuccessPopupState.message = message;
+      window.globalSuccessPopupState.onClose = () => {
+        // Additional cleanup if needed
+      };
+    }
+  }, []);
 
   const handleCloseButShowInFuture = useCallback(async () => {
     setSharedModalOptions(businessOptions);
@@ -77,11 +101,11 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
     }
     handleClose();
     
-    // Show success popup after closing banner
+    // Show success popup after closing banner using global state
     setTimeout(() => {
-      setSuccessPopupOpen(true);
-    }, 100);
-  }, [onPreferenceComplete, handleClose]);
+      showGlobalSuccessPopup("Your preference has been updated.");
+    }, 150);
+  }, [onPreferenceComplete, handleClose, showGlobalSuccessPopup]);
 
   const handleSharedModalSubmit = useCallback(
     async (selectedReason: string | null, additionalComments: string) => {
@@ -95,8 +119,9 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         setSharedModalOpen(false);
         handleClose();
         
-        setSuccessMessage("Your preference has been updated.");
-        setSuccessPopupOpen(true);
+        setTimeout(() => {
+          showGlobalSuccessPopup("Your preference has been updated.");
+        }, 150);
         return;
       }
 
@@ -105,6 +130,8 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
       try {
         const reason =
           selectedReason || additionalComments || "User provided feedback";
+
+        let successMessage = "";
 
         if (modalType === "campaign") {
           await setClosurePreference({
@@ -125,9 +152,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
             "TEMPORARY_CLOSE_SESSION"
           );
 
-          setSuccessMessage(
-            "You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period."
-          );
+          successMessage = "You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period.";
         } else {
           await setClosurePreference({
             userId,
@@ -146,9 +171,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
             closureCount,
             "GLOBAL_OPT_OUT"
           );
-          setSuccessMessage(
-            "You have been opted out of all future insights and campaigns."
-          );
+          successMessage = "You have been opted out of all future insights and campaigns.";
         }
 
         // Close banner and modals IMMEDIATELY after API success
@@ -158,8 +181,10 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         setSharedModalOpen(false);
         handleClose();
         
-        // Show success popup
-        setSuccessPopupOpen(true);
+        // Show success popup using global state
+        setTimeout(() => {
+          showGlobalSuccessPopup(successMessage);
+        }, 150);
       } catch (error) {
         console.error("Error setting preference:", error);
 
@@ -170,8 +195,9 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         setSharedModalOpen(false);
         handleClose();
         
-        setSuccessMessage("Your preference has been updated.");
-        setSuccessPopupOpen(true);
+        setTimeout(() => {
+          showGlobalSuccessPopup("Your preference has been updated.");
+        }, 150);
       } finally {
         setIsProcessing(false);
       }
@@ -186,15 +212,12 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
       recordClosure,
       onPreferenceComplete,
       handleClose,
+      showGlobalSuccessPopup,
     ]
   );
 
   const handleSharedModalClose = useCallback(() => {
     setSharedModalOpen(false);
-  }, []);
-
-  const handleSuccessPopupClose = useCallback(() => {
-    setSuccessPopupOpen(false);
   }, []);
 
   return (
@@ -229,13 +252,6 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
           </ModalFooter>
         </USBModal>
       </SecondBannerExternalBannerPopup>
-
-      {/* Success confirmation popup - Shows AFTER banner is closed */}
-      <PopupCloseandShowBanner
-        isOpen={isSuccessPopupOpen}
-        handleClose={handleSuccessPopupClose}
-        message={successMessage}
-      />
 
       {/* Shared Modal for collecting reasons */}
       <SharedModal

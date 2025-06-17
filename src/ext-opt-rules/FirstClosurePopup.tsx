@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import USBModal, {
   ModalHeader,
   ModalBody,
@@ -24,6 +24,47 @@ interface FirstClosurePopupProps {
   onPreferenceComplete?: () => void;
 }
 
+// Global state for success popup to render outside banner hierarchy
+let globalSuccessPopupState = {
+  isOpen: false,
+  message: "",
+  onClose: () => {}
+};
+
+// Global component that renders outside any banner
+export const GlobalSuccessPopup: React.FC = () => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    const checkGlobalState = () => {
+      if (globalSuccessPopupState.isOpen !== isOpen) {
+        setIsOpen(globalSuccessPopupState.isOpen);
+        setMessage(globalSuccessPopupState.message);
+      }
+    };
+
+    const interval = setInterval(checkGlobalState, 100);
+    return () => clearInterval(interval);
+  }, [isOpen]);
+
+  const handleClose = () => {
+    setIsOpen(false);
+    globalSuccessPopupState.isOpen = false;
+    globalSuccessPopupState.onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <PopupCloseandShowBanner
+      isOpen={isOpen}
+      handleClose={handleClose}
+      message={message}
+    />
+  );
+};
+
 const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
   isOpen,
   handleClose,
@@ -33,10 +74,8 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
   closureCount = 1,
   onPreferenceComplete,
 }) => {
-  const [isSuccessPopupOpen, setSuccessPopupOpen] = useState(false);
   const [isDontShowAgainPopupOpen, setDontShowAgainPopupOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [successMessage, setSuccessMessage] = useState("");
 
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
@@ -53,6 +92,15 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
 
   const [setClosurePreference] = useSetClosurePreferenceMutation();
   const { recordClosure } = useSessionClosureManager();
+
+  const showGlobalSuccessPopup = useCallback((message: string) => {
+    // Set global state that will be picked up by GlobalSuccessPopup
+    globalSuccessPopupState.isOpen = true;
+    globalSuccessPopupState.message = message;
+    globalSuccessPopupState.onClose = () => {
+      // Additional cleanup if needed
+    };
+  }, []);
 
   const handleCloseAndShowLater = useCallback(async () => {
     if (!campaignId || !userId || !companyId) {
@@ -84,9 +132,11 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       // Close this modal
       handleClose();
       
-      // Then show success popup
-      setSuccessMessage("The banner has been closed for now and will be shown to you in a future session.");
-      setSuccessPopupOpen(true);
+      // Show success popup using global state (outside banner hierarchy)
+      setTimeout(() => {
+        showGlobalSuccessPopup("The banner has been closed for now and will be shown to you in a future session.");
+      }, 150);
+      
     } catch (error) {
       console.error('Error setting preference:', error);
       // Even on error, close the banner
@@ -94,12 +144,14 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         onPreferenceComplete();
       }
       handleClose();
-      setSuccessMessage("The banner has been closed for now.");
-      setSuccessPopupOpen(true);
+      
+      setTimeout(() => {
+        showGlobalSuccessPopup("The banner has been closed for now.");
+      }, 150);
     } finally {
       setIsProcessing(false);
     }
-  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure, onPreferenceComplete, handleClose]);
+  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure, onPreferenceComplete, handleClose, showGlobalSuccessPopup]);
 
   const handleDontShowAgainClick = useCallback(() => {
     setDontShowAgainPopupOpen(true);
@@ -114,10 +166,11 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
     }
     handleClose();
     
-    // Show success popup
-    setSuccessMessage("We won't show you this banner again.");
-    setSuccessPopupOpen(true);
-  }, [onPreferenceComplete, handleClose]);
+    // Show success popup using global state
+    setTimeout(() => {
+      showGlobalSuccessPopup("We won't show you this banner again.");
+    }, 150);
+  }, [onPreferenceComplete, handleClose, showGlobalSuccessPopup]);
 
   const handleDontShowAgainSubmit = useCallback(
     async (selectedReason: string | null, additionalComments: string) => {
@@ -128,8 +181,10 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         }
         setDontShowAgainPopupOpen(false);
         handleClose();
-        setSuccessMessage("We won't show you this banner again.");
-        setSuccessPopupOpen(true);
+        
+        setTimeout(() => {
+          showGlobalSuccessPopup("We won't show you this banner again.");
+        }, 150);
         return;
       }
 
@@ -166,9 +221,10 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         setDontShowAgainPopupOpen(false);
         handleClose();
         
-        // Show success popup
-        setSuccessMessage("We won't show you this banner again.");
-        setSuccessPopupOpen(true);
+        // Show success popup using global state
+        setTimeout(() => {
+          showGlobalSuccessPopup("We won't show you this banner again.");
+        }, 150);
       } catch (error) {
         console.error("Error setting preference:", error);
         
@@ -178,8 +234,10 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         }
         setDontShowAgainPopupOpen(false);
         handleClose();
-        setSuccessMessage("We won't show you this banner again.");
-        setSuccessPopupOpen(true);
+        
+        setTimeout(() => {
+          showGlobalSuccessPopup("We won't show you this banner again.");
+        }, 150);
       } finally {
         setIsProcessing(false);
       }
@@ -193,12 +251,9 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
       recordClosure,
       onPreferenceComplete,
       handleClose,
+      showGlobalSuccessPopup,
     ]
   );
-
-  const handleSuccessPopupClose = useCallback(() => {
-    setSuccessPopupOpen(false);
-  }, []);
 
   const handleDontShowAgainPopupClose = useCallback(() => {
     setDontShowAgainPopupOpen(false);
@@ -237,13 +292,6 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
           </ModalFooter>
         </USBModal>
       </ExternalBannerPopup>
-
-      {/* Success confirmation popup - Shows AFTER banner is closed */}
-      <PopupCloseandShowBanner
-        isOpen={isSuccessPopupOpen}
-        handleClose={handleSuccessPopupClose}
-        message={successMessage}
-      />
 
       {/* Don't show again reasons modal */}
       <SharedModal

@@ -203,6 +203,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
     ]);
 
     // This gets called when user completes their preference choice
+    // Success popup is now handled globally, not here
     const handleBannerClosureComplete = useCallback(() => {
       console.log('Banner closure complete - hiding banner');
       
@@ -305,7 +306,7 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
           </BannerContainer>
         )}
 
-        {/* Modals */}
+        {/* Modals - Success popup is now handled globally */}
         {isFirstModalOpen && (
           <FirstClosurePopup
             isOpen={isFirstModalOpen}
