@@ -515,3 +515,27 @@ curl "http://localhost:8080/api/v1/rotatecampaign/next?date=20250705&company=com
 
 The debug endpoints will show you exactly what's happening with the closure logic.
 */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Closure preference global entitiy update
+
+
+```sql
+ALTER TABLE user_global_preference 
+ADD COLUMN global_wait_until_date DATETIME NULL;
+
+ALTER TABLE user_global_preference 
+ADD COLUMN global_wait_reason VARCHAR(500) NULL;
+```

@@ -32,6 +32,16 @@ public class UserGlobalPreference {
     @Column(name = "updated_date")
     @Temporal(TemporalType.TIMESTAMP)
     private Date updatedDate;
+
+
+    // NEW FIELDS for global wait period
+    @Column(name = "global_wait_until_date")
+    @Temporal(TemporalType.TIMESTAMP)
+    private Date globalWaitUntilDate;
+    
+    @Column(name = "global_wait_reason")
+    private String globalWaitReason;
+    
     
     @PrePersist
     protected void onCreate() {
