@@ -205,6 +205,7 @@ public class UserInsightClosureService {
     /**
      * Set 1-month wait for ALL campaigns (not just one specific campaign)
      * This creates a global waiting period where no campaigns show
+     * FIXED: Use UserGlobalPreference instead of fake campaign records
      */
     private void setOneMonthWaitForAllCampaigns(String userId, String companyId, String reason, Date effectiveDate) {
         log.info("Setting 1-month wait period for ALL campaigns for user {}", userId);
@@ -215,22 +216,29 @@ public class UserInsightClosureService {
         cal.add(Calendar.MONTH, 1);
         Date waitUntilDate = cal.getTime();
         
-        // Create or update a special "global wait" closure record
-        String globalWaitCampaignId = "GLOBAL_WAIT_" + userId + "_" + companyId;
+        // Use UserGlobalPreference to store global wait period
+        UserGlobalPreference preference = globalPreferenceRepository
+                .findByUserId(userId)
+                .orElse(createNewGlobalPreference(userId));
         
-        UserInsightClosure globalWaitClosure = closureRepository
-                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, globalWaitCampaignId)
-                .orElse(createNewClosure(userId, companyId, globalWaitCampaignId));
+        // Set wait period end date in global preference
+        preference.setGlobalWaitUntilDate(waitUntilDate);
+        preference.setGlobalWaitReason(reason);
+        preference.setUpdatedDate(effectiveDate);
         
-        globalWaitClosure.setClosureReason(reason);
-        globalWaitClosure.setNextEligibleDate(waitUntilDate);
-        globalWaitClosure.setLastClosureDate(effectiveDate);
-        globalWaitClosure.setUpdatedDate(effectiveDate);
+        // Keep insights enabled (this is just a temporary wait, not opt-out)
+        if (preference.getInsightsEnabled() == null) {
+            preference.setInsightsEnabled(true);
+        }
         
-        closureRepository.save(globalWaitClosure);
-        
-        log.info("Set 1-month wait until {} for ALL campaigns (user {}, company {})", 
-                waitUntilDate, userId, companyId);
+        try {
+            globalPreferenceRepository.save(preference);
+            log.info("Successfully set 1-month wait until {} for ALL campaigns (user {}, company {}) using UserGlobalPreference", 
+                    waitUntilDate, userId, companyId);
+        } catch (Exception e) {
+            log.error("Error saving global preference for wait period: {}", e.getMessage(), e);
+            throw e;
+        }
     }
     
     /**
@@ -278,27 +286,22 @@ public class UserInsightClosureService {
     
     /**
      * Check if user is in 1-month wait period at specific date
-     * FIXED: Checks for global waiting period from "don't show again" choices
+     * FIXED: Checks UserGlobalPreference for global waiting period
      */
     public boolean isUserInWaitPeriod(String userId, String companyId, Date checkDate) {
         log.info("=== CHECKING WAIT PERIOD ===");
         log.info("Checking wait period for user {} company {} at date {}", userId, companyId, checkDate);
         
-        // Check for global wait period
-        String globalWaitCampaignId = "GLOBAL_WAIT_" + userId + "_" + companyId;
-        Optional<UserInsightClosure> globalWaitOpt = closureRepository
-                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, globalWaitCampaignId);
-        
-        if (globalWaitOpt.isPresent()) {
-            UserInsightClosure globalWait = globalWaitOpt.get();
-            if (globalWait.getNextEligibleDate() != null && 
-                globalWait.getNextEligibleDate().after(checkDate)) {
+        // Check UserGlobalPreference for global wait period
+        Optional<UserGlobalPreference> prefOpt = globalPreferenceRepository.findByUserId(userId);
+        if (prefOpt.isPresent()) {
+            UserGlobalPreference pref = prefOpt.get();
+            if (pref.getGlobalWaitUntilDate() != null && 
+                pref.getGlobalWaitUntilDate().after(checkDate)) {
                 log.info("User {} in GLOBAL wait period until {} (checked at {})", 
-                        userId, globalWait.getNextEligibleDate(), checkDate);
-                log.info("=== WAIT PERIOD: TRUE (GLOBAL) ===");
+                        userId, pref.getGlobalWaitUntilDate(), checkDate);
+                log.info("=== WAIT PERIOD: TRUE (GLOBAL PREFERENCE) ===");
                 return true;
-            } else {
-                log.info("Global wait period expired or not set for user {}", userId);
             }
         }
         
@@ -307,11 +310,6 @@ public class UserInsightClosureService {
                 .findByUserIdAndCompanyId(userId, companyId);
         
         for (UserInsightClosure closure : closures) {
-            // Skip the global wait record we just checked
-            if (closure.getCampaignId().startsWith("GLOBAL_WAIT_")) {
-                continue;
-            }
-            
             if (closure.getNextEligibleDate() != null && 
                 closure.getNextEligibleDate().after(checkDate)) {
                 
@@ -348,11 +346,6 @@ public class UserInsightClosureService {
         List<String> blockedCampaigns = new ArrayList<>();
         
         for (UserInsightClosure closure : closures) {
-            // Skip global wait records
-            if (closure.getCampaignId().startsWith("GLOBAL_WAIT_")) {
-                continue;
-            }
-            
             log.info("Campaign {}: permanent={}, nextEligible={}, reason={}, closureCount={}", 
                      closure.getCampaignId(), 
                      closure.getPermanentlyClosed(), 
@@ -479,11 +472,6 @@ public class UserInsightClosureService {
         List<String> temporarilyClosedCampaignIds = new ArrayList<>();
         
         for (UserInsightClosure closure : closures) {
-            // Skip global wait records
-            if (closure.getCampaignId().startsWith("GLOBAL_WAIT_")) {
-                continue;
-            }
-            
             log.debug("Checking closure for campaign {}: count={}, permanent={}, nextEligible={}, reason={}", 
                      closure.getCampaignId(), closure.getClosureCount(), 
                      closure.getPermanentlyClosed(), closure.getNextEligibleDate(), closure.getClosureReason());
@@ -636,6 +624,11 @@ public class UserInsightClosureService {
     // ===== HELPER METHODS =====
     
     private UserInsightClosure createNewClosure(String userId, String companyId, String campaignId) {
+        // SAFETY CHECK: Never create fake campaign records
+        if (campaignId.startsWith("GLOBAL_WAIT_")) {
+            throw new IllegalArgumentException("Cannot create closure record for fake campaign ID: " + campaignId);
+        }
+        
         UserInsightClosure closure = new UserInsightClosure();
         closure.setId(UUID.randomUUID().toString());
         closure.setUserId(userId);
