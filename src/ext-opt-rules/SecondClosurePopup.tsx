@@ -63,8 +63,9 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   const { recordClosure } = useSessionClosureManager();
 
   const showGlobalSuccessPopup = useCallback((message: string) => {
-    // Use global state to show success popup outside banner hierarchy
+    // Use the same global state variable as FirstClosurePopup
     if (typeof window !== 'undefined') {
+      // Make sure we're using the same global variable name as FirstClosurePopup
       if (!window.globalSuccessPopupState) {
         window.globalSuccessPopupState = {
           isOpen: false,
@@ -72,11 +73,16 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
           onClose: () => {}
         };
       }
+      
+      console.log('SecondClosurePopup: Setting global success popup state:', message);
       window.globalSuccessPopupState.isOpen = true;
       window.globalSuccessPopupState.message = message;
       window.globalSuccessPopupState.onClose = () => {
-        // Additional cleanup if needed
+        console.log('SecondClosurePopup: Global success popup closed');
       };
+      
+      // Force a state update by dispatching a custom event
+      window.dispatchEvent(new CustomEvent('globalSuccessPopupStateChanged'));
     }
   }, []);
 
@@ -120,7 +126,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         handleClose();
         
         setTimeout(() => {
-          showGlobalSuccessPopup("Your preference has been updated.");
+          showGlobalSuccessPopup("Your preference has been updated. updated");
         }, 150);
         return;
       }
@@ -171,7 +177,9 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
             closureCount,
             "GLOBAL_OPT_OUT"
           );
-          successMessage = "You have been opted out of all future insights and campaigns.";
+          
+          // FIXED: Correct message for global opt-out
+          successMessage = "We won't show you any banners anymore.";
         }
 
         // Close banner and modals IMMEDIATELY after API success

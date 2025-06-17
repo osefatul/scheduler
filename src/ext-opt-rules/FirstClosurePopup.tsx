@@ -25,11 +25,15 @@ interface FirstClosurePopupProps {
 }
 
 // Global state for success popup to render outside banner hierarchy
-let globalSuccessPopupState = {
-  isOpen: false,
-  message: "",
-  onClose: () => {}
-};
+declare global {
+  interface Window {
+    globalSuccessPopupState: {
+      isOpen: boolean;
+      message: string;
+      onClose: () => void;
+    };
+  }
+}
 
 // Global component that renders outside any banner
 export const GlobalSuccessPopup: React.FC = () => {
@@ -38,20 +42,42 @@ export const GlobalSuccessPopup: React.FC = () => {
 
   useEffect(() => {
     const checkGlobalState = () => {
-      if (globalSuccessPopupState.isOpen !== isOpen) {
-        setIsOpen(globalSuccessPopupState.isOpen);
-        setMessage(globalSuccessPopupState.message);
+      if (typeof window !== 'undefined' && window.globalSuccessPopupState) {
+        if (window.globalSuccessPopupState.isOpen !== isOpen) {
+          console.log('GlobalSuccessPopup: State changed:', window.globalSuccessPopupState);
+          setIsOpen(window.globalSuccessPopupState.isOpen);
+          setMessage(window.globalSuccessPopupState.message);
+        }
       }
     };
 
+    // Check immediately
+    checkGlobalState();
+
+    // Set up interval to check periodically
     const interval = setInterval(checkGlobalState, 100);
-    return () => clearInterval(interval);
+    
+    // Also listen for custom events
+    const handleStateChange = () => {
+      console.log('GlobalSuccessPopup: Received state change event');
+      checkGlobalState();
+    };
+    
+    window.addEventListener('globalSuccessPopupStateChanged', handleStateChange);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('globalSuccessPopupStateChanged', handleStateChange);
+    };
   }, [isOpen]);
 
   const handleClose = () => {
+    console.log('GlobalSuccessPopup: Closing popup');
     setIsOpen(false);
-    globalSuccessPopupState.isOpen = false;
-    globalSuccessPopupState.onClose();
+    if (typeof window !== 'undefined' && window.globalSuccessPopupState) {
+      window.globalSuccessPopupState.isOpen = false;
+      window.globalSuccessPopupState.onClose();
+    }
   };
 
   if (!isOpen) return null;
@@ -95,11 +121,25 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
 
   const showGlobalSuccessPopup = useCallback((message: string) => {
     // Set global state that will be picked up by GlobalSuccessPopup
-    globalSuccessPopupState.isOpen = true;
-    globalSuccessPopupState.message = message;
-    globalSuccessPopupState.onClose = () => {
-      // Additional cleanup if needed
-    };
+    if (typeof window !== 'undefined') {
+      if (!window.globalSuccessPopupState) {
+        window.globalSuccessPopupState = {
+          isOpen: false,
+          message: "",
+          onClose: () => {}
+        };
+      }
+      
+      console.log('FirstClosurePopup: Setting global success popup state:', message);
+      window.globalSuccessPopupState.isOpen = true;
+      window.globalSuccessPopupState.message = message;
+      window.globalSuccessPopupState.onClose = () => {
+        console.log('FirstClosurePopup: Global success popup closed');
+      };
+      
+      // Force a state update by dispatching a custom event
+      window.dispatchEvent(new CustomEvent('globalSuccessPopupStateChanged'));
+    }
   }, []);
 
   const handleCloseAndShowLater = useCallback(async () => {
