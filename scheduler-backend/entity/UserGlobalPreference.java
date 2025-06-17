@@ -41,7 +41,7 @@ public class UserGlobalPreference {
     
     @Column(name = "global_wait_reason")
     private String globalWaitReason;
-    
+
     
     @PrePersist
     protected void onCreate() {
@@ -53,4 +53,21 @@ public class UserGlobalPreference {
     protected void onUpdate() {
         updatedDate = new Date();
     }
+
+        // Manual getters and setters for new fields (in case Lombok doesn't pick them up)
+        public Date getGlobalWaitUntilDate() {
+            return globalWaitUntilDate;
+        }
+        
+        public void setGlobalWaitUntilDate(Date globalWaitUntilDate) {
+            this.globalWaitUntilDate = globalWaitUntilDate;
+        }
+        
+        public String getGlobalWaitReason() {
+            return globalWaitReason;
+        }
+        
+        public void setGlobalWaitReason(String globalWaitReason) {
+            this.globalWaitReason = globalWaitReason;
+        }
 }
