@@ -1,16 +1,18 @@
-// FIXED SecondClosurePopup.tsx - NEW APPROACH
-import React, { useState, useCallback, useRef } from "react";
-import USBModal, { ModalHeader, ModalBody, ModalFooter } from "@usb-shield/react-modal";
+import React, { useState, useCallback } from "react";
+import USBModal, {
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+} from "@usb-shield/react-modal";
 import Button from "@usb-shield/react-button";
 import { businessOptions, dontShowAgainOptions } from "./BannerselectOptions";
 import PopupCloseandShowBanner from "./PopupCloseandShow";
-import SharedModal from '../../../../../packages/shared/src/utils/SharedBannerContent';
-import { useSetClosurePreferenceMutation, useHandleGlobalOptOutMutation } from './campaignClosureAPI';
-import { useSessionClosureManager } from './sessionClosureManager';
+import SharedModal from "../../../../../packages/shared/src/utils/SharedBannerContent";
 
-import {
-  SecondBannerExternalBannerPopup,
-} from "./SecondInsightBannerPopup.styles";
+import { SecondBannerExternalBannerPopup } from "./SecondInsightBannerPopup.styles";
+import { useSetClosurePreferenceMutation } from "@/external/services/campaignClosureAPI";
+import { useSessionClosureManager } from "@/external/utils/sessionClosureManager";
+import { useLocation } from "react-router-dom";
 
 interface SecondClosurePopupProps {
   isOpen: boolean;
@@ -29,132 +31,181 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   userId,
   companyId,
   closureCount = 2,
-  onPreferenceComplete
+  onPreferenceComplete,
 }) => {
   const [isSuccessPopupOpen, setSuccessPopupOpen] = useState(false);
   const [isSharedModalOpen, setSharedModalOpen] = useState(false);
   const [sharedModalOptions, setSharedModalOptions] = useState(businessOptions);
-  const [modalType, setModalType] = useState<'campaign' | 'global'>('campaign');
+  const [modalType, setModalType] = useState<"campaign" | "global">("campaign");
   const [isProcessing, setIsProcessing] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
-  
-  // Track if we should trigger onPreferenceComplete after success popup closes
-  const shouldCompleteOnSuccessClose = useRef(false);
 
-  // API hooks
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const dateParam = queryParams.get("date");
+  let effectiveDate: Date;
+  if (dateParam && /^\d{8}$/.test(dateParam)) {
+    const formatted = `${dateParam.slice(0, 4)}-${dateParam.slice(4, 6)}-${dateParam.slice(6, 8)}`;
+    effectiveDate = new Date(formatted);
+  } else if (dateParam && !isNaN(Date.parse(dateParam))) {
+    effectiveDate = new Date(dateParam);
+  } else {
+    effectiveDate = new Date();
+  }
+
   const [setClosurePreference] = useSetClosurePreferenceMutation();
-  const [handleGlobalOptOut] = useHandleGlobalOptOutMutation();
   const { recordClosure } = useSessionClosureManager();
 
-  // Handle "Close now but show in future"
   const handleCloseButShowInFuture = useCallback(async () => {
     setSharedModalOptions(businessOptions);
-    setModalType('campaign');
+    setModalType("campaign");
     setSharedModalOpen(true);
   }, []);
 
-  // Handle "Stop showing this ad"
   const handleStopShowingAd = useCallback(() => {
     setSharedModalOptions(dontShowAgainOptions);
-    setModalType('global');
+    setModalType("global");
     setSharedModalOpen(true);
   }, []);
 
-  // Handle SharedModal onSubmit (called after onProceed)
   const handleSharedModalOnSubmit = useCallback(async () => {
-    console.log('SharedModal complete - closing and showing success');
     setSharedModalOpen(false);
     
-    // Close the main modal
+    // Close banner and main modal immediately
+    if (onPreferenceComplete) {
+      onPreferenceComplete();
+    }
     handleClose();
     
-    // Show success popup
+    // Show success popup after closing banner
     setTimeout(() => {
       setSuccessPopupOpen(true);
-      shouldCompleteOnSuccessClose.current = true;
     }, 100);
-  }, [handleClose]);
+  }, [onPreferenceComplete, handleClose]);
 
-  // Handle SharedModal onProceed
-  const handleSharedModalSubmit = useCallback(async (selectedReason: string | null, additionalComments: string) => {
-    if (!campaignId || !userId || !companyId) {
-      console.error('Missing required parameters');
-      setSuccessMessage("Your preference has been updated.");
-      return;
-    }
-
-    setIsProcessing(true);
-
-    try {
-      const reason = selectedReason || additionalComments || "User provided feedback";
-
-      if (modalType === 'campaign') {
-        // "Close now but show in future"
-        await setClosurePreference({
-          userId,
-          companyId,
-          campaignId,
-          wantsToSee: true,
-          reason,
-          isGlobalResponse: true,
-          preferenceDate: new Date().toISOString().split('T')[0]
-        }).unwrap();
-
-        console.log('Global preference set: User wants future campaigns after 1-month wait');
-        recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE_SESSION');
+  const handleSharedModalSubmit = useCallback(
+    async (selectedReason: string | null, additionalComments: string) => {
+      if (!campaignId || !userId || !companyId) {
+        console.error("Missing required parameters for preference API");
         
-        setSuccessMessage("You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period.");
-
-      } else {
-        // "Stop showing this ad" - Global opt-out
-        await setClosurePreference({
-          userId,
-          companyId,
-          campaignId,
-          wantsToSee: false,
-          reason,
-          isGlobalResponse: true,
-          preferenceDate: new Date().toISOString().split('T')[0]
-        }).unwrap();
-
-        console.log('Global preference set: Complete opt out');
-        recordClosure(campaignId, userId, companyId, closureCount, 'GLOBAL_OPT_OUT');
-        setSuccessMessage("You have been opted out of all future insights and campaigns.");
+        // Close banner and modals immediately even without API
+        if (onPreferenceComplete) {
+          onPreferenceComplete();
+        }
+        setSharedModalOpen(false);
+        handleClose();
+        
+        setSuccessMessage("Your preference has been updated.");
+        setSuccessPopupOpen(true);
+        return;
       }
 
-    } catch (error) {
-      console.error('Error setting preference:', error);
-      setSuccessMessage("Your preference has been updated.");
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [campaignId, userId, companyId, closureCount, modalType, setClosurePreference, recordClosure]);
+      setIsProcessing(true);
 
-  // Handle SharedModal close
+      try {
+        const reason =
+          selectedReason || additionalComments || "User provided feedback";
+
+        if (modalType === "campaign") {
+          await setClosurePreference({
+            userId,
+            companyId,
+            campaignId,
+            wantsToSee: true,
+            reason,
+            isGlobalResponse: true,
+            preferenceDate: effectiveDate.toISOString().split('T')[0]
+          }).unwrap();
+
+          recordClosure(
+            campaignId,
+            userId,
+            companyId,
+            closureCount,
+            "TEMPORARY_CLOSE_SESSION"
+          );
+
+          setSuccessMessage(
+            "You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period."
+          );
+        } else {
+          await setClosurePreference({
+            userId,
+            companyId,
+            campaignId,
+            wantsToSee: false,
+            reason,
+            isGlobalResponse: true,
+            preferenceDate: effectiveDate.toISOString().split('T')[0]
+          }).unwrap();
+
+          recordClosure(
+            campaignId,
+            userId,
+            companyId,
+            closureCount,
+            "GLOBAL_OPT_OUT"
+          );
+          setSuccessMessage(
+            "You have been opted out of all future insights and campaigns."
+          );
+        }
+
+        // Close banner and modals IMMEDIATELY after API success
+        if (onPreferenceComplete) {
+          onPreferenceComplete();
+        }
+        setSharedModalOpen(false);
+        handleClose();
+        
+        // Show success popup
+        setSuccessPopupOpen(true);
+      } catch (error) {
+        console.error("Error setting preference:", error);
+
+        // Even on error, close banner and modals
+        if (onPreferenceComplete) {
+          onPreferenceComplete();
+        }
+        setSharedModalOpen(false);
+        handleClose();
+        
+        setSuccessMessage("Your preference has been updated.");
+        setSuccessPopupOpen(true);
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [
+      campaignId,
+      userId,
+      companyId,
+      closureCount,
+      modalType,
+      setClosurePreference,
+      recordClosure,
+      onPreferenceComplete,
+      handleClose,
+    ]
+  );
+
   const handleSharedModalClose = useCallback(() => {
     setSharedModalOpen(false);
   }, []);
 
-  // Handle success popup close
   const handleSuccessPopupClose = useCallback(() => {
-    console.log('Success popup closing');
     setSuccessPopupOpen(false);
-    
-    // Check if we should complete the preference flow
-    if (shouldCompleteOnSuccessClose.current && onPreferenceComplete) {
-      console.log('✅ Calling onPreferenceComplete to hide banner');
-      onPreferenceComplete();
-      shouldCompleteOnSuccessClose.current = false;
-    }
-  }, [onPreferenceComplete]);
+  }, []);
 
   return (
     <>
       <SecondBannerExternalBannerPopup>
-        <USBModal handleClose={handleClose} id="second-closure-modal" isOpen={isOpen}>
-          <ModalHeader id="second-closure-header">
-            Close banner?
-          </ModalHeader>
+        <USBModal
+          handleClose={handleClose}
+          id="second-closure-modal"
+          isOpen={isOpen}
+        >
+          <ModalHeader id="second-closure-header">Close banner?</ModalHeader>
           <ModalBody>
             You've closed similar ads recently. Want to stop seeing these?
           </ModalBody>
@@ -179,19 +230,19 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         </USBModal>
       </SecondBannerExternalBannerPopup>
 
-      {/* Success popup */}
+      {/* Success confirmation popup - Shows AFTER banner is closed */}
       <PopupCloseandShowBanner
         isOpen={isSuccessPopupOpen}
         handleClose={handleSuccessPopupClose}
         message={successMessage}
       />
 
-      {/* Shared Modal */}
+      {/* Shared Modal for collecting reasons */}
       <SharedModal
         isOpen={isSharedModalOpen}
         handleClose={handleSharedModalClose}
         headerText={
-          modalType === 'campaign' 
+          modalType === "campaign"
             ? "Help us understand why you're closing this banner."
             : "Help us understand why you don't want to see these ads."
         }
