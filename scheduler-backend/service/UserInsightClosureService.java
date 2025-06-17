@@ -37,7 +37,7 @@ public class UserInsightClosureService {
     
     /**
      * Record an insight closure by a user with specific date
-     * FIXED: Proper logic for weekly rotation system
+     * FIXED: Proper logic for weekly rotation system with waiting periods
      */
     @Transactional
     public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
@@ -76,24 +76,25 @@ public class UserInsightClosureService {
             response.setRequiresUserInput(false);
             
         } else if (closure.getClosureCount() == 2) {
-            // SECOND CLOSURE: Check if user is already in waiting period to determine prompt type
+            // SECOND CLOSURE: Check if user is already in waiting period to determine popup type
             log.info("SECOND closure for campaign {} at date {}. Checking if user is in waiting period.", 
                     campaignId, effectiveDate);
             
-            // CRITICAL FIX: Check if user is currently in waiting period (not just other campaign closures)
+            // CRITICAL: Check if user is currently in 1-month waiting period
             boolean isInWaitPeriod = isUserInWaitPeriod(userId, companyId, effectiveDate);
             
             if (isInWaitPeriod) {
-                // User is already in waiting period - ask about ALL future insights (global prompt)
-                log.info("User {} is in waiting period. Showing global prompt for campaign {}", 
+                // User is already in waiting period from previous "don't show again" choice
+                // Show SECOND closure popup (global options)
+                log.info("User {} is in waiting period. Showing SecondClosurePopup for campaign {}", 
                         userId, campaignId);
                 response.setAction("PROMPT_GLOBAL_PREFERENCE");
-                response.setMessage("You've closed multiple campaigns recently. Would you like to see future insights/campaigns?");
+                response.setMessage("You've closed campaigns recently. Want to stop seeing these?");
                 response.setRequiresUserInput(true);
                 response.setIsGlobalPrompt(true);
             } else {
-                // User is NOT in waiting period - ask about THIS campaign only (first closure prompt)
-                log.info("User {} is NOT in waiting period. Showing campaign-specific prompt for campaign {}", 
+                // User is NOT in waiting period - show FIRST closure popup
+                log.info("User {} is NOT in waiting period. Showing FirstClosurePopup for campaign {}", 
                         userId, campaignId);
                 response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
                 response.setMessage("Would you like to see this campaign again in the future?");
@@ -115,11 +116,6 @@ public class UserInsightClosureService {
     }
     
     /**
-     * REMOVED: hasUserClosedOtherCampaigns method since it was causing the issue
-     * The logic now properly checks if user is in waiting period instead
-     */
-    
-    /**
      * Handle user's response to preference prompt (backward compatible)
      */
     @Transactional
@@ -130,6 +126,7 @@ public class UserInsightClosureService {
     
     /**
      * Handle user's response to preference prompt
+     * FIXED: Proper handling of waiting periods and permanent blocks
      */
     @Transactional
     public void handlePreferenceResponse(String userId, String companyId, String campaignId,
@@ -140,52 +137,59 @@ public class UserInsightClosureService {
                 userId, campaignId, wantsToSee, isGlobalResponse, effectiveDate);
 
         if (isGlobalResponse) {
-            // This is response to "see future insights?" prompt (global)
+            // This is response from SecondClosurePopup
             if (wantsToSee) {
-                // User wants to see future insights - set 1-month wait for THIS campaign only
-                log.info("User wants future insights. Setting 1-month wait for campaign {}", campaignId);
-                setOneMonthWaitForCampaign(userId, companyId, campaignId, reason, effectiveDate);
+                // User chose "Close now but show in future" - 1-month wait for ALL campaigns
+                log.info("User chose 'show in future'. Setting 1-month wait for ALL campaigns");
+                setOneMonthWaitForAllCampaigns(userId, companyId, reason, effectiveDate);
             } else {
-                // User doesn't want future insights - GLOBAL OPT-OUT
-                log.info("User doesn't want future insights. Global opt-out for user {}", userId);
+                // User chose "Stop showing this ad" - GLOBAL OPT-OUT
+                log.info("User chose 'stop showing ads'. Global opt-out for user {}", userId);
                 handleGlobalOptOut(userId, reason, effectiveDate);
             }
         } else {
-            // This is response to "see this campaign again?" prompt (campaign-specific)
+            // This is response from FirstClosurePopup
             UserInsightClosure closure = closureRepository
                     .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
                     .orElseThrow(() -> new DataHandlingException(HttpStatus.NOT_FOUND.toString(),
                             "No closure record found"));
             
-            log.info("=== PREFERENCE RESPONSE DEBUG ===");
+            log.info("=== FIRST CLOSURE PREFERENCE RESPONSE ===");
             log.info("BEFORE: closureCount={}, permanent={}, nextEligible={}, reason={}", 
                      closure.getClosureCount(), closure.getPermanentlyClosed(), 
                      closure.getNextEligibleDate(), closure.getClosureReason());
             
             if (wantsToSee) {
-                // User wants to see THIS campaign again - mark as eligible
-                log.info("User wants to see campaign {} again. Marking as eligible.", campaignId);
+                // User chose "Close & show later" - temporary close for this session/week only
+                log.info("User chose 'close & show later' for campaign {}. Temporary close only.", campaignId);
                 
-                // Keep closure count, clear blocking flags
+                // Keep closure count, clear any blocking flags, set reason
                 closure.setPermanentlyClosed(false);
                 closure.setNextEligibleDate(null);
-                closure.setClosureReason(reason != null ? reason : "User chose to see campaign again");
+                closure.setClosureReason(reason != null ? reason : "User chose to see campaign later");
+                
+                // NO waiting period - campaign can appear again in future weeks
                 
             } else {
-                // User doesn't want THIS campaign - permanently block it
-                log.info("User doesn't want campaign {}. Setting permanent block.", campaignId);
+                // User chose "Don't show again" - PERMANENT block + 1-month wait for ALL campaigns
+                log.info("User chose 'don't show again' for campaign {}. Permanent block + 1-month wait for ALL campaigns.", campaignId);
                 
+                // 1. Permanently block THIS campaign
                 closure.setClosureReason(reason != null ? reason : "User chose not to see campaign again");
-                closure.setPermanentlyClosed(true);  // This should block the campaign
+                closure.setPermanentlyClosed(true);
                 
-                // Set nextEligibleDate far in future for extra safety
+                // Set nextEligibleDate far in future for this campaign (permanent block)
                 Calendar cal = Calendar.getInstance();
                 cal.setTime(effectiveDate);
-                cal.add(Calendar.YEAR, 10);  // 10 years in future = effectively permanent
+                cal.add(Calendar.YEAR, 10);  // 10 years = effectively permanent for this campaign
                 closure.setNextEligibleDate(cal.getTime());
                 
                 log.info("Campaign {} permanently blocked with nextEligibleDate: {}", 
                          campaignId, closure.getNextEligibleDate());
+                
+                // 2. Set 1-month waiting period for ALL campaigns
+                setOneMonthWaitForAllCampaigns(userId, companyId, 
+                    "User chose 'don't show again' for campaign " + campaignId, effectiveDate);
             }
             
             closure.setUpdatedDate(effectiveDate);
@@ -194,29 +198,39 @@ public class UserInsightClosureService {
             log.info("AFTER SAVE: closureCount={}, permanent={}, nextEligible={}, reason={}", 
                      saved.getClosureCount(), saved.getPermanentlyClosed(), 
                      saved.getNextEligibleDate(), saved.getClosureReason());
-            log.info("=== PREFERENCE RESPONSE COMPLETE ===");
+            log.info("=== FIRST CLOSURE PREFERENCE COMPLETE ===");
         }
     }
     
     /**
-     * Set 1-month wait for a specific campaign
+     * Set 1-month wait for ALL campaigns (not just one specific campaign)
+     * This creates a global waiting period where no campaigns show
      */
-    private void setOneMonthWaitForCampaign(String userId, String companyId, String campaignId, 
-            String reason, Date effectiveDate) {
-        UserInsightClosure closure = closureRepository
-                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
-                .orElseThrow(() -> new RuntimeException("Closure record not found"));
+    private void setOneMonthWaitForAllCampaigns(String userId, String companyId, String reason, Date effectiveDate) {
+        log.info("Setting 1-month wait period for ALL campaigns for user {}", userId);
         
-        closure.setClosureReason(reason);
-        
+        // Calculate 1-month from effective date
         Calendar cal = Calendar.getInstance();
         cal.setTime(effectiveDate);
         cal.add(Calendar.MONTH, 1);
-        closure.setNextEligibleDate(cal.getTime());
-        closure.setUpdatedDate(effectiveDate);
+        Date waitUntilDate = cal.getTime();
         
-        closureRepository.save(closure);
-        log.info("Set 1-month wait until {} for campaign {}", closure.getNextEligibleDate(), campaignId);
+        // Create or update a special "global wait" closure record
+        String globalWaitCampaignId = "GLOBAL_WAIT_" + userId + "_" + companyId;
+        
+        UserInsightClosure globalWaitClosure = closureRepository
+                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, globalWaitCampaignId)
+                .orElse(createNewClosure(userId, companyId, globalWaitCampaignId));
+        
+        globalWaitClosure.setClosureReason(reason);
+        globalWaitClosure.setNextEligibleDate(waitUntilDate);
+        globalWaitClosure.setLastClosureDate(effectiveDate);
+        globalWaitClosure.setUpdatedDate(effectiveDate);
+        
+        closureRepository.save(globalWaitClosure);
+        
+        log.info("Set 1-month wait until {} for ALL campaigns (user {}, company {})", 
+                waitUntilDate, userId, companyId);
     }
     
     /**
@@ -264,21 +278,39 @@ public class UserInsightClosureService {
     
     /**
      * Check if user is in 1-month wait period at specific date
-     * During wait period, user should see NO campaigns at all
-     * 
-     * FIXED: This method now properly determines if user should see global prompt
+     * FIXED: Checks for global waiting period from "don't show again" choices
      */
     public boolean isUserInWaitPeriod(String userId, String companyId, Date checkDate) {
+        log.info("=== CHECKING WAIT PERIOD ===");
+        log.info("Checking wait period for user {} company {} at date {}", userId, companyId, checkDate);
+        
+        // Check for global wait period
+        String globalWaitCampaignId = "GLOBAL_WAIT_" + userId + "_" + companyId;
+        Optional<UserInsightClosure> globalWaitOpt = closureRepository
+                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, globalWaitCampaignId);
+        
+        if (globalWaitOpt.isPresent()) {
+            UserInsightClosure globalWait = globalWaitOpt.get();
+            if (globalWait.getNextEligibleDate() != null && 
+                globalWait.getNextEligibleDate().after(checkDate)) {
+                log.info("User {} in GLOBAL wait period until {} (checked at {})", 
+                        userId, globalWait.getNextEligibleDate(), checkDate);
+                log.info("=== WAIT PERIOD: TRUE (GLOBAL) ===");
+                return true;
+            } else {
+                log.info("Global wait period expired or not set for user {}", userId);
+            }
+        }
+        
+        // Also check individual campaigns for 1-month waits (legacy support)
         List<UserInsightClosure> closures = closureRepository
                 .findByUserIdAndCompanyId(userId, companyId);
         
-        log.info("=== CHECKING WAIT PERIOD ===");
-        log.info("Checking {} closure records for user {} company {} at date {}", 
-                 closures.size(), userId, companyId, checkDate);
-        
         for (UserInsightClosure closure : closures) {
-            log.debug("Closure for campaign {}: nextEligible={}, permanent={}", 
-                     closure.getCampaignId(), closure.getNextEligibleDate(), closure.getPermanentlyClosed());
+            // Skip the global wait record we just checked
+            if (closure.getCampaignId().startsWith("GLOBAL_WAIT_")) {
+                continue;
+            }
             
             if (closure.getNextEligibleDate() != null && 
                 closure.getNextEligibleDate().after(checkDate)) {
@@ -289,9 +321,9 @@ public class UserInsightClosureService {
                 boolean isPermanentBlock = closure.getNextEligibleDate().after(farFuture.getTime());
                 
                 if (!isPermanentBlock) {
-                    log.info("User {} in 1-month wait period until {} (checked at {})", 
-                            userId, closure.getNextEligibleDate(), checkDate);
-                    log.info("=== WAIT PERIOD: TRUE ===");
+                    log.info("User {} in campaign-specific wait period until {} for campaign {} (checked at {})", 
+                            userId, closure.getNextEligibleDate(), closure.getCampaignId(), checkDate);
+                    log.info("=== WAIT PERIOD: TRUE (CAMPAIGN-SPECIFIC) ===");
                     return true;
                 }
             }
@@ -316,6 +348,11 @@ public class UserInsightClosureService {
         List<String> blockedCampaigns = new ArrayList<>();
         
         for (UserInsightClosure closure : closures) {
+            // Skip global wait records
+            if (closure.getCampaignId().startsWith("GLOBAL_WAIT_")) {
+                continue;
+            }
+            
             log.info("Campaign {}: permanent={}, nextEligible={}, reason={}, closureCount={}", 
                      closure.getCampaignId(), 
                      closure.getPermanentlyClosed(), 
@@ -368,6 +405,11 @@ public class UserInsightClosureService {
             return true;
         }
         
+        // Check if user is in global waiting period
+        if (isUserInWaitPeriod(userId, companyId, checkDate)) {
+            return true;
+        }
+        
         Optional<UserInsightClosure> closureOpt = closureRepository
                 .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
         
@@ -389,15 +431,18 @@ public class UserInsightClosureService {
             return true; // NEVER show this campaign again
         }
         
-        // If has nextEligibleDate, check if it's in the future
-        if (closure.getNextEligibleDate() != null && closure.getNextEligibleDate().after(checkDate)) {
-            log.debug("Campaign {} blocked for user {} until {} (waiting period or permanent)", 
-                     campaignId, userId, closure.getNextEligibleDate());
-            return true;
+        // If has nextEligibleDate far in future (permanent block)
+        if (closure.getNextEligibleDate() != null) {
+            Calendar farFuture = Calendar.getInstance();
+            farFuture.add(Calendar.YEAR, 5);
+            if (closure.getNextEligibleDate().after(farFuture.getTime())) {
+                log.debug("Campaign {} permanently blocked for user {} (far future date)", 
+                         campaignId, userId);
+                return true;
+            }
         }
         
-        // CRITICAL CHANGE: closureCount=1 does NOT block campaign
-        // Only closureCount=2 blocks (waiting for user preference response)
+        // closureCount=2 without response blocks temporarily
         if (closure.getClosureCount() == 2 && 
             closure.getClosureReason() == null &&  // No response given yet
             closure.getPermanentlyClosed() == null &&  // Not decided yet
@@ -408,7 +453,7 @@ public class UserInsightClosureService {
             return true; // Blocked until user responds to preference prompt
         }
         
-        // closureCount=1 or reset to 0 = not blocked
+        // closureCount=1 or user chose "show later" = not blocked
         return false;
     }
     
@@ -434,6 +479,10 @@ public class UserInsightClosureService {
         List<String> temporarilyClosedCampaignIds = new ArrayList<>();
         
         for (UserInsightClosure closure : closures) {
+            // Skip global wait records
+            if (closure.getCampaignId().startsWith("GLOBAL_WAIT_")) {
+                continue;
+            }
             
             log.debug("Checking closure for campaign {}: count={}, permanent={}, nextEligible={}, reason={}", 
                      closure.getCampaignId(), closure.getClosureCount(), 
@@ -455,15 +504,7 @@ public class UserInsightClosureService {
                 }
             }
             
-            // 1. Campaign has short-term wait period (1-month wait from global preference)
-            if (closure.getNextEligibleDate() != null && closure.getNextEligibleDate().after(checkDate)) {
-                temporarilyClosedCampaignIds.add(closure.getCampaignId());
-                log.debug("Campaign {} blocked - in wait period until {}", 
-                         closure.getCampaignId(), closure.getNextEligibleDate());
-                continue;
-            }
-            
-            // 2. Campaign reached closureCount=2 but user hasn't responded yet
+            // Campaign reached closureCount=2 but user hasn't responded yet
             if (closure.getClosureCount() >= 2 && 
                 closure.getClosureReason() == null &&  // No response given yet
                 closure.getPermanentlyClosed() == null &&  // Not decided yet
@@ -475,7 +516,7 @@ public class UserInsightClosureService {
                 continue;
             }
             
-            // All other cases: Campaign is ELIGIBLE
+            // All other cases: Campaign is ELIGIBLE (unless in global wait period)
             log.debug("Campaign {} is ELIGIBLE for temporary check", closure.getCampaignId());
         }
         
