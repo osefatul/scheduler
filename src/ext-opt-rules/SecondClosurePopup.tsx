@@ -102,12 +102,6 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
     console.log('SecondClosurePopup: Set modalType to "global"');
   }, []);
 
-  const handleSharedModalOnSubmit = useCallback(async () => {
-    // This is called when user submits without selecting a specific reason
-    // Just call handleSharedModalSubmit with null reason
-    await handleSharedModalSubmit(null, "");
-  }, [handleSharedModalSubmit]);
-
   const handleSharedModalSubmit = useCallback(
     async (selectedReason: string | null, additionalComments: string) => {
       if (!campaignId || !userId || !companyId) {
@@ -135,6 +129,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         let successMessage = "";
 
         if (modalType === "campaign") {
+          // User chose "Close now but show in future"
           await setClosurePreference({
             userId,
             companyId,
@@ -153,9 +148,11 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
             "TEMPORARY_CLOSE_SESSION"
           );
 
-          successMessage = "You won't see campaigns for 1 month. Future campaigns will be shown after the waiting period.";
+          // FIXED: Show "Preference updated" message for campaign type
+          successMessage = "Preference updated.";
           console.log('SecondClosurePopup: Campaign type - setting message:', successMessage);
         } else {
+          // User chose "Stop showing this ad" (global opt-out)
           await setClosurePreference({
             userId,
             companyId,
@@ -174,7 +171,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
             "GLOBAL_OPT_OUT"
           );
           
-          // FIXED: Correct message for global opt-out
+          // FIXED: Show "We won't show you any banners anymore" for global opt-out
           successMessage = "We won't show you any banners anymore.";
           console.log('SecondClosurePopup: Global type - setting message:', successMessage);
         }
@@ -194,15 +191,20 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
       } catch (error) {
         console.error("Error setting preference:", error);
 
-        // Even on error, close banner and modals
+        // Even on error, close banner and modals with appropriate message
         if (onPreferenceComplete) {
           onPreferenceComplete();
         }
         setSharedModalOpen(false);
         handleClose();
         
+        // FIXED: Show different error messages based on modal type
+        const errorMessage = modalType === "global" 
+          ? "We won't show you any banners anymore." 
+          : "Preference updated.";
+        
         setTimeout(() => {
-          showGlobalSuccessPopup("Your preference has been updated.");
+          showGlobalSuccessPopup(errorMessage);
         }, 150);
       } finally {
         setIsProcessing(false);
