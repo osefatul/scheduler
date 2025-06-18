@@ -45,6 +45,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   const [sharedModalOptions, setSharedModalOptions] = useState(businessOptions);
   const [modalType, setModalType] = useState<"campaign" | "global">("campaign");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [hasSubmitted, setHasSubmitted] = useState(false); // Prevent duplicate submissions
 
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
@@ -104,6 +105,12 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
 
   const handleSharedModalSubmit = useCallback(
     async (selectedReason: string | null, additionalComments: string) => {
+      // Prevent duplicate submissions
+      if (hasSubmitted || isProcessing) {
+        console.log('SecondClosurePopup: Duplicate submission prevented');
+        return;
+      }
+
       if (!campaignId || !userId || !companyId) {
         console.error("Missing required parameters for preference API");
         
@@ -121,6 +128,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
       }
 
       setIsProcessing(true);
+      setHasSubmitted(true); // Mark as submitted
 
       try {
         const reason =
@@ -208,9 +216,13 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         }, 150);
       } finally {
         setIsProcessing(false);
+        // Reset hasSubmitted after a delay to allow for potential future use
+        setTimeout(() => setHasSubmitted(false), 1000);
       }
     },
     [
+      hasSubmitted,
+      isProcessing,
       campaignId,
       userId,
       companyId,
@@ -226,12 +238,15 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
 
   const handleSharedModalOnSubmit = useCallback(async () => {
     // This is called when user submits without selecting a specific reason
-    // Call the main submit function with empty parameters
-    await handleSharedModalSubmit(null, "");
-  }, [handleSharedModalSubmit]);
+    // To prevent duplicate API calls, we'll handle this differently
+    console.log('SecondClosurePopup: handleSharedModalOnSubmit called - skipping to prevent duplicate API call');
+    // Don't call handleSharedModalSubmit here to avoid duplicate API calls
+    // The SharedModal component should handle this through onProceed
+  }, []);
 
   const handleSharedModalClose = useCallback(() => {
     setSharedModalOpen(false);
+    setHasSubmitted(false); // Reset submission state when modal closes
   }, []);
 
   return (
