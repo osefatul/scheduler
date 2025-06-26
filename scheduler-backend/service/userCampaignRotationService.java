@@ -420,22 +420,27 @@ public class UserCampaignRotationService {
             return null;
         }
 
-        // CRITICAL FIX: Get permanently blocked campaigns upfront
+        // Get permanently blocked campaigns upfront
         List<String> permanentlyBlockedCampaignIds = insightClosureService
                 .getPermanentlyBlockedCampaignIds(userId, companyId);
 
-        // CRITICAL FIX: Remove permanently blocked campaigns from eligible list
+        // Remove permanently blocked campaigns from eligible list
         List<CampaignMapping> nonBlockedCampaigns = eligibleCampaigns.stream()
                 .filter(c -> !permanentlyBlockedCampaignIds.contains(c.getId()))
                 .collect(Collectors.toList());
 
-        if (nonBlockedCampaigns.isEmpty()) {
-            log.info("No non-blocked campaigns available for rotation");
+        // filter out campaigns that have exhausted display cap
+        List<CampaignMapping> availableCampaigns = nonBlockedCampaigns.stream()
+                .filter(c -> !isCampaignExhaustedForUser(userId, companyId, c.getId()))
+                .collect(Collectors.toList());
+
+        if (availableCampaigns.isEmpty()) {
+            log.info("No available campaigns after filtering blocked and exhausted campaigns");
             return null;
         }
 
         // Sort by creation date for consistent rotation
-        nonBlockedCampaigns.sort((c1, c2) -> {
+        availableCampaigns.sort((c1, c2) -> {
             int createdCompare = c1.getCreatedDate().compareTo(c2.getCreatedDate());
             if (createdCompare != 0) {
                 return createdCompare;
@@ -447,38 +452,42 @@ public class UserCampaignRotationService {
         List<String> temporarilyClosedCampaignIds = insightClosureService
                 .getClosedCampaignIds(userId, companyId, currentDate);
 
-        log.info("Getting next campaign in rotation. Permanently blocked: {}, Temporarily closed: {}",
+        log.info(
+                "Getting next campaign in rotation. Permanently blocked: {}, Temporarily closed: {}, Exhausted campaigns filtered out",
                 permanentlyBlockedCampaignIds, temporarilyClosedCampaignIds);
-        log.info("Non-blocked campaigns available: {}",
-                nonBlockedCampaigns.stream()
+        log.info("Available campaigns after all filters: {}",
+                availableCampaigns.stream()
                         .map(c -> c.getId() + "(" + c.getCreatedDate() + ")")
                         .collect(Collectors.joining(", ")));
 
         // If this is the first campaign for the user OR last campaign was permanently
-        // blocked
-        if (lastCampaign == null || permanentlyBlockedCampaignIds.contains(lastCampaign.getId())) {
-            CampaignMapping firstAvailable = nonBlockedCampaigns.stream()
+        // blocked OR exhausted
+        if (lastCampaign == null ||
+                permanentlyBlockedCampaignIds.contains(lastCampaign.getId()) ||
+                isCampaignExhaustedForUser(userId, companyId, lastCampaign.getId())) {
+
+            CampaignMapping firstAvailable = availableCampaigns.stream()
                     .filter(c -> !temporarilyClosedCampaignIds.contains(c.getId()))
                     .findFirst()
                     .orElse(null);
-            log.info("First campaign or last was blocked, selected: {} (oldest created)",
+            log.info("First campaign or last was blocked/exhausted, selected: {} (oldest created)",
                     firstAvailable != null ? firstAvailable.getId() : "none");
             return firstAvailable;
         }
 
-        // Find last campaign's position in NON-BLOCKED sorted list
+        // Find last campaign's position in available sorted list
         int lastIndex = -1;
-        for (int i = 0; i < nonBlockedCampaigns.size(); i++) {
-            if (nonBlockedCampaigns.get(i).getId().equals(lastCampaign.getId())) {
+        for (int i = 0; i < availableCampaigns.size(); i++) {
+            if (availableCampaigns.get(i).getId().equals(lastCampaign.getId())) {
                 lastIndex = i;
                 break;
             }
         }
 
-        log.info("Last campaign {} found at index {} in non-blocked sorted list",
+        log.info("Last campaign {} found at index {} in available sorted list",
                 lastCampaign.getId(), lastIndex);
 
-        // If last campaign not found in non-blocked list, start from beginning
+        // If last campaign not found in available list, start from beginning
         if (lastIndex == -1) {
             lastIndex = -1;
         }
@@ -487,12 +496,12 @@ public class UserCampaignRotationService {
         int attempts = 0;
         int nextIndex = lastIndex;
 
-        while (attempts < nonBlockedCampaigns.size()) {
-            nextIndex = (nextIndex + 1) % nonBlockedCampaigns.size();
-            CampaignMapping candidate = nonBlockedCampaigns.get(nextIndex);
+        while (attempts < availableCampaigns.size()) {
+            nextIndex = (nextIndex + 1) % availableCampaigns.size();
+            CampaignMapping candidate = availableCampaigns.get(nextIndex);
 
             if (!temporarilyClosedCampaignIds.contains(candidate.getId())) {
-                log.info("Selected next campaign in rotation: {} (index {} in non-blocked sorted list)",
+                log.info("Selected next campaign in rotation: {} (index {} in available sorted list)",
                         candidate.getId(), nextIndex);
                 return candidate;
             }
@@ -800,5 +809,37 @@ public class UserCampaignRotationService {
 
         // Save the tracker
         return userTrackerRepository.save(weeklyTracker);
+    }
+
+    private boolean isCampaignExhaustedForUser(String userId, String companyId, String campaignId) {
+        log.info("Checking if campaign {} is exhausted for user {}", campaignId, userId);
+
+        // Find ALL trackers for this user-campaign combination (any week)
+        List<UserCampaignTracker> allTrackers = userTrackerRepository
+                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
+
+        if (allTrackers.isEmpty()) {
+            log.info("No trackers found for user {}, campaign {} - not exhausted", userId, campaignId);
+            return false;
+        }
+
+        // Check if the most recent tracker has exhausted display cap
+        UserCampaignTracker mostRecentTracker = allTrackers.stream()
+                .max(Comparator.comparing(
+                        tracker -> tracker.getLastViewDate() != null ? tracker.getLastViewDate() : new Date(0)))
+                .orElse(null);
+
+        if (mostRecentTracker != null) {
+            boolean isExhausted = mostRecentTracker.getRemainingDisplayCap() != null &&
+                    mostRecentTracker.getRemainingDisplayCap() <= 0;
+
+            log.info("Campaign {} exhaustion check for user {}: {} (displayCap={})",
+                    campaignId, userId, isExhausted ? "EXHAUSTED" : "AVAILABLE",
+                    mostRecentTracker.getRemainingDisplayCap());
+
+            return isExhausted;
+        }
+
+        return false;
     }
 }
