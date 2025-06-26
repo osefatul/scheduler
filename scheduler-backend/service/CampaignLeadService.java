@@ -3,16 +3,15 @@ package com.usbank.corp.dcr.api.service;
 import com.usbank.corp.dcr.api.repository.CampaignLeadRepository;
 import com.usbank.corp.dcr.api.entity.CampaignLeadDTO;
 import com.usbank.corp.dcr.api.entity.CampaignLeadMapping;
-import com.usbank.corp.dcr.api.entity.UserInsightClosure;
-import com.usbank.corp.dcr.api.repository.UserInsightClosureRepository;
+import com.usbank.corp.dcr.api.entity.UserCampaignTracker;
+import com.usbank.corp.dcr.api.repository.UserCampaignTrackerRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.Calendar;
 import java.util.Date;
+import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 @Slf4j
 @Service
@@ -20,25 +19,22 @@ public class CampaignLeadService {
 
     private final CampaignLeadRepository campaignLeadRepository;
     private final WarmLeadTrackingService warmLeadTrackingService;
-    private final UserInsightClosureService userInsightClosureService;
-    private final UserInsightClosureRepository closureRepository;
+    private final UserCampaignTrackerRepository userCampaignTrackerRepository;
 
     public CampaignLeadService(CampaignLeadRepository campaignLeadRepository,
                              WarmLeadTrackingService warmLeadTrackingService,
-                             UserInsightClosureService userInsightClosureService,
-                             UserInsightClosureRepository closureRepository) {
+                             UserCampaignTrackerRepository userCampaignTrackerRepository) {
         this.campaignLeadRepository = campaignLeadRepository;
         this.warmLeadTrackingService = warmLeadTrackingService;
-        this.userInsightClosureService = userInsightClosureService;
-        this.closureRepository = closureRepository;
-        log.info("CampaignLeadService initialized with warm lead tracking and closure services");
+        this.userCampaignTrackerRepository = userCampaignTrackerRepository;
+        log.info("CampaignLeadService initialized with warm lead tracking and campaign tracker services");
     }
 
     @Transactional
     public CampaignLeadDTO createCampaignLead(CampaignLeadDTO campaignLeadDTO) {
         log.info("Creating hot lead (campaign lead) with details: {}", campaignLeadDTO);
         
-        // Extract user and company identifiers early for closure logic
+        // Extract user and company identifiers early
         String userIdentifier = extractUserIdentifier(campaignLeadDTO);
         String companyIdentifier = extractCompanyIdentifier(campaignLeadDTO);
         
@@ -80,18 +76,17 @@ public class CampaignLeadService {
         CampaignLeadMapping saved = campaignLeadRepository.save(campaignLeadMapping);
         log.info("✅ Hot lead created successfully with ID: {}", saved.getId());
         
-        // CRITICAL: Permanently close the campaign for this user after successful hot lead creation
-        boolean closureSuccess = permanentlyCloseCampaignForUser(
+        // CRITICAL: Exhaust campaign display cap for this user (instead of using closure system)
+        boolean exhaustSuccess = exhaustCampaignForUser(
             userIdentifier, 
             companyIdentifier, 
-            saved.getCampaignId(), 
-            "CONVERTED_TO_HOT_LEAD - User submitted form and became a hot lead"
+            saved.getCampaignId()
         );
         
         // Build response DTO
-        String responseMessage = closureSuccess ? 
-            "Hot lead created successfully and campaign permanently closed" :
-            "Hot lead created successfully (campaign closure attempted but may have failed - check logs)";
+        String responseMessage = exhaustSuccess ? 
+            "Hot lead created successfully and campaign exhausted for user (can see other campaigns)" :
+            "Hot lead created successfully (campaign exhaustion attempted but may have failed - check logs)";
             
         CampaignLeadDTO responseDTO = CampaignLeadDTO.builder()
             .id(saved.getId())
@@ -103,7 +98,7 @@ public class CampaignLeadService {
             .build();
             
         log.info("=== HOT LEAD CREATION COMPLETE ===");
-        log.info("Hot lead creation process completed. Closure success: {}", closureSuccess);
+        log.info("Hot lead creation process completed. Campaign exhaustion success: {}", exhaustSuccess);
         return responseDTO;
     }
 
@@ -135,126 +130,101 @@ public class CampaignLeadService {
     }
 
     /**
-     * Permanently close a campaign for a user after they become a hot lead
-     * This ensures the user will NEVER see this campaign/banner again
+     * Exhaust the campaign for a specific user by setting their display cap to 0
+     * This prevents them from seeing this campaign again WITHOUT affecting other campaigns
      * 
      * @param userId User identifier
      * @param companyId Company identifier  
      * @param campaignId Campaign identifier
-     * @param reason Reason for closure
-     * @return true if closure was successful, false otherwise
+     * @return true if exhaustion was successful, false otherwise
      */
-    private boolean permanentlyCloseCampaignForUser(String userId, String companyId, String campaignId, String reason) {
-        log.info("=== PERMANENT CAMPAIGN CLOSURE START ===");
-        log.info("Permanently closing campaign {} for user {} in company {}", campaignId, userId, companyId);
-        log.info("Reason: {}", reason);
+    private boolean exhaustCampaignForUser(String userId, String companyId, String campaignId) {
+        log.info("=== CAMPAIGN EXHAUSTION START ===");
+        log.info("Exhausting campaign {} for user {} in company {} (HOT LEAD CONVERSION)", campaignId, userId, companyId);
         
         try {
-            Date effectiveDate = new Date();
+            Date currentDate = new Date();
             
-            // METHOD 1: Try using the existing service method (preferred)
-            try {
-                log.info("Attempting closure using UserInsightClosureService...");
+            // Find all trackers for this user-campaign combination
+            List<UserCampaignTracker> existingTrackers = userCampaignTrackerRepository
+                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
+            
+            if (existingTrackers.isEmpty()) {
+                log.info("No existing trackers found for user {}, campaign {}. Creating exhausted tracker.", userId, campaignId);
                 
-                // First record a closure to ensure the closure record exists
-                userInsightClosureService.recordInsightClosure(userId, companyId, campaignId, effectiveDate);
+                // Create a new tracker with exhausted values
+                UserCampaignTracker exhaustedTracker = new UserCampaignTracker();
+                exhaustedTracker.setId(java.util.UUID.randomUUID().toString());
+                exhaustedTracker.setUserId(userId);
+                exhaustedTracker.setCompanyId(companyId);
+                exhaustedTracker.setCampaignId(campaignId);
                 
-                // Then handle it as "Don't show again" response 
-                userInsightClosureService.handlePreferenceResponse(
-                    userId, 
-                    companyId, 
-                    campaignId, 
-                    false, // wantsToSee = false (equivalent to "Don't show again")
-                    reason, 
-                    false, // isGlobalResponse = false (campaign-specific permanent block)
-                    effectiveDate
-                );
+                // Set to 0 to indicate exhausted (no more views available)
+                exhaustedTracker.setRemainingWeeklyFrequency(0);
+                exhaustedTracker.setRemainingDisplayCap(0);
                 
-                log.info("✅ Successfully permanently closed campaign {} for user {} using UserInsightClosureService", 
-                        campaignId, userId);
+                // Set current date and week start
+                exhaustedTracker.setLastViewDate(currentDate);
                 
-                // Verify the closure was applied correctly
-                boolean isNowClosed = userInsightClosureService.isCampaignClosedForUser(userId, companyId, campaignId, effectiveDate);
-                log.info("Verification: Campaign {} is now closed for user {}: {}", campaignId, userId, isNowClosed);
+                // Calculate current week start date (you might need to inject RotationUtils here)
+                Date weekStartDate = getCurrentWeekStartDate(currentDate);
+                exhaustedTracker.setWeekStartDate(weekStartDate);
                 
-                return true;
+                UserCampaignTracker saved = userCampaignTrackerRepository.save(exhaustedTracker);
                 
-            } catch (Exception serviceException) {
-                log.warn("UserInsightClosureService method failed: {}. Trying direct database approach...", serviceException.getMessage());
+                log.info("✅ Created exhausted tracker for user {}, campaign {} with ID: {}", 
+                        userId, campaignId, saved.getId());
+                log.info("  - Weekly Frequency: {} (exhausted)", saved.getRemainingWeeklyFrequency());
+                log.info("  - Display Cap: {} (exhausted)", saved.getRemainingDisplayCap());
                 
-                // METHOD 2: Direct database manipulation as fallback
-                return createPermanentClosureRecordDirect(userId, companyId, campaignId, reason, effectiveDate);
+            } else {
+                log.info("Found {} existing tracker(s) for user {}, campaign {}. Exhausting all.", 
+                        existingTrackers.size(), userId, campaignId);
+                
+                // Exhaust all existing trackers for this user-campaign combination
+                for (UserCampaignTracker tracker : existingTrackers) {
+                    log.info("Exhausting tracker ID: {}, Current freq: {}, Current cap: {}", 
+                            tracker.getId(), tracker.getRemainingWeeklyFrequency(), tracker.getRemainingDisplayCap());
+                    
+                    // Set both counters to 0 (exhausted)
+                    tracker.setRemainingWeeklyFrequency(0);
+                    tracker.setRemainingDisplayCap(0);
+                    tracker.setLastViewDate(currentDate);
+                    
+                    UserCampaignTracker updated = userCampaignTrackerRepository.save(tracker);
+                    
+                    log.info("✅ Exhausted tracker ID: {}, New freq: {}, New cap: {}", 
+                            updated.getId(), updated.getRemainingWeeklyFrequency(), updated.getRemainingDisplayCap());
+                }
             }
             
+            log.info("=== CAMPAIGN EXHAUSTION COMPLETE ===");
+            log.info("Campaign {} successfully exhausted for user {}. User can still see OTHER campaigns.", campaignId, userId);
+            return true;
+            
         } catch (Exception e) {
-            log.error("❌ Complete failure in permanent campaign closure: {}", e.getMessage(), e);
+            log.error("❌ Failed to exhaust campaign {} for user {}: {}", campaignId, userId, e.getMessage(), e);
+            log.info("=== CAMPAIGN EXHAUSTION FAILED ===");
             return false;
         }
     }
     
     /**
-     * Fallback method: Create permanent closure record directly in database
-     * This ensures the campaign is blocked even if the service method fails
+     * Get the start date of the current week (Monday)
+     * This is a simplified version - you might want to inject RotationUtils for this
      */
-    private boolean createPermanentClosureRecordDirect(String userId, String companyId, String campaignId, String reason, Date effectiveDate) {
-        try {
-            log.info("Creating permanent closure record directly in database...");
-            
-            // Find existing closure record or create new one
-            Optional<UserInsightClosure> existingClosureOpt = closureRepository
-                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
-            
-            UserInsightClosure closure;
-            if (existingClosureOpt.isPresent()) {
-                closure = existingClosureOpt.get();
-                log.info("Found existing closure record with count: {}", closure.getClosureCount());
-            } else {
-                closure = new UserInsightClosure();
-                closure.setId(UUID.randomUUID().toString());
-                closure.setUserId(userId);
-                closure.setCompanyId(companyId);
-                closure.setCampaignId(campaignId);
-                closure.setClosureCount(0);
-                closure.setCreatedDate(effectiveDate);
-                log.info("Created new closure record");
-            }
-            
-            // Set permanent closure flags
-            closure.setPermanentlyClosed(true);
-            closure.setClosureReason(reason);
-            closure.setLastClosureDate(effectiveDate);
-            closure.setUpdatedDate(effectiveDate);
-            
-            // Set next eligible date far in the future (10+ years = effectively permanent)
-            Calendar cal = Calendar.getInstance();
-            cal.setTime(effectiveDate);
-            cal.add(Calendar.YEAR, 10);
-            closure.setNextEligibleDate(cal.getTime());
-            
-            // Ensure opt-out flag is false (this is campaign-specific, not global opt-out)
-            closure.setOptOutAllInsights(false);
-            
-            // Save the closure record
-            UserInsightClosure savedClosure = closureRepository.save(closure);
-            
-            log.info("✅ Direct database closure record created successfully:");
-            log.info("  - Campaign ID: {}", savedClosure.getCampaignId());
-            log.info("  - Permanently Closed: {}", savedClosure.getPermanentlyClosed());
-            log.info("  - Next Eligible Date: {}", savedClosure.getNextEligibleDate());
-            log.info("  - Closure Reason: {}", savedClosure.getClosureReason());
-            
-            // Verify using the service method
-            boolean isNowClosed = userInsightClosureService.isCampaignClosedForUser(userId, companyId, campaignId, effectiveDate);
-            log.info("Verification: Campaign {} is now closed for user {}: {}", campaignId, userId, isNowClosed);
-            
-            log.info("=== PERMANENT CAMPAIGN CLOSURE COMPLETE (DIRECT) ===");
-            return true;
-            
-        } catch (Exception e) {
-            log.error("❌ Direct database closure also failed: {}", e.getMessage(), e);
-            log.info("=== PERMANENT CAMPAIGN CLOSURE FAILED ===");
-            return false;
-        }
+    private Date getCurrentWeekStartDate(Date currentDate) {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        cal.setTime(currentDate);
+        
+        // Set to Monday of current week
+        cal.set(java.util.Calendar.DAY_OF_WEEK, java.util.Calendar.MONDAY);
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        cal.set(java.util.Calendar.MINUTE, 0);
+        cal.set(java.util.Calendar.SECOND, 0);
+        cal.set(java.util.Calendar.MILLISECOND, 0);
+        
+        return cal.getTime();
     }
     
     /**

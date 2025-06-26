@@ -50,11 +50,12 @@ public class LeadController {
     
     /**
      * Create a hot lead (campaign lead) - typically after user clicks "Talk to RM"
-     * IMPORTANT: This will automatically permanently close the campaign for the user
+     * IMPORTANT: This will exhaust the campaign for the user (set display cap to 0)
+     * but they can still see OTHER campaigns in future weeks
      */
     @PostMapping("/hot/create")
     public ResponseEntity<CampaignLeadDTO> createHotLead(@Valid @RequestBody CampaignLeadDTO campaignLeadDTO) {
-        log.info("Creating hot lead for campaign: {}, user: {} (will permanently close campaign)", 
+        log.info("Creating hot lead for campaign: {}, user: {} (will exhaust campaign but preserve other campaigns)", 
                 campaignLeadDTO.getCampaignId(), campaignLeadDTO.getUserIdentifier());
         
         CampaignLeadDTO result = campaignLeadService.createCampaignLead(campaignLeadDTO);
@@ -148,7 +149,7 @@ public class LeadController {
     /**
      * Complete conversion flow: track warm lead and immediately convert to hot lead
      * This is useful for scenarios where you want to track engagement and conversion in one call
-     * IMPORTANT: This will automatically permanently close the campaign for the user
+     * IMPORTANT: This will exhaust the campaign for the user but preserve access to other campaigns
      */
     @PostMapping("/convert-complete")
     public ResponseEntity<CampaignLeadDTO> completeConversionFlow(
@@ -156,7 +157,7 @@ public class LeadController {
             @RequestHeader(value = "User-Agent", required = false) String userAgent,
             @RequestHeader(value = "Referer", required = false) String referrer) {
         
-        log.info("Starting complete conversion flow for user: {}, campaign: {} (will permanently close campaign)", 
+        log.info("Starting complete conversion flow for user: {}, campaign: {} (will exhaust campaign but preserve other campaigns)", 
                 campaignLeadDTO.getUserIdentifier(), campaignLeadDTO.getCampaignId());
         
         try {
@@ -177,10 +178,10 @@ public class LeadController {
                 log.info("Warm lead tracked as part of complete conversion flow");
             }
             
-            // Then create hot lead (which will also mark warm lead as converted AND permanently close campaign)
+            // Then create hot lead (which will also mark warm lead as converted AND exhaust campaign)
             CampaignLeadDTO result = campaignLeadService.createCampaignLead(campaignLeadDTO);
             
-            log.info("Complete conversion flow completed successfully with permanent campaign closure");
+            log.info("Complete conversion flow completed successfully with campaign exhaustion");
             return ResponseEntity.ok(result);
             
         } catch (Exception e) {
