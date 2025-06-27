@@ -33,6 +33,9 @@ public class UserGlobalPreference {
     @Temporal(TemporalType.TIMESTAMP)
     private Date updatedDate;
 
+    @Column(name = "has_been_in_wait_period")
+    private Boolean hasBeenInWaitPeriod = false;
+
 
     // NEW FIELDS for global wait period
     @Column(name = "global_wait_until_date")

@@ -50,101 +50,70 @@ public class UserInsightClosureService {
      * FIXED: Proper logic for weekly rotation system with waiting periods
      */
     @Transactional
-public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
-        String campaignId, Date effectiveDate) throws DataHandlingException {
+    public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
+    String campaignId, Date effectiveDate) throws DataHandlingException {
 
-    log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
-            userId, companyId, campaignId, effectiveDate);
+log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
+        userId, companyId, campaignId, effectiveDate);
 
-    // Check if user has global opt-out
-    if (isUserGloballyOptedOut(userId, effectiveDate)) {
-        throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
-                "User has opted out of all insights");
-    }
+// Check if user has global opt-out
+if (isUserGloballyOptedOut(userId, effectiveDate)) {
+    throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
+            "User has opted out of all insights");
+}
 
-    // Find or create closure record
-    UserInsightClosure closure = closureRepository
-            .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
-            .orElse(createNewClosure(userId, companyId, campaignId));
+// Find or create closure record
+UserInsightClosure closure = closureRepository
+        .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
+        .orElse(createNewClosure(userId, companyId, campaignId));
 
-    // Increment closure count
-    closure.setClosureCount(closure.getClosureCount() + 1);
-    closure.setLastClosureDate(effectiveDate);
+// Increment closure count
+closure.setClosureCount(closure.getClosureCount() + 1);
+closure.setLastClosureDate(effectiveDate);
 
-    InsightClosureResponseDTO response = new InsightClosureResponseDTO();
-    response.setCampaignId(campaignId);
-    response.setClosureCount(closure.getClosureCount());
-    response.setEffectiveDate(effectiveDate);
+InsightClosureResponseDTO response = new InsightClosureResponseDTO();
+response.setCampaignId(campaignId);
+response.setClosureCount(closure.getClosureCount());
+response.setEffectiveDate(effectiveDate);
 
-    // CRITICAL FIX: Determine popup type based on wait period history, not just current closure count
-    boolean wasInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
-    boolean isCurrentlyInWaitPeriod = isUserInWaitPeriod(userId, companyId, effectiveDate);
+// SIMPLIFIED LOGIC: Check if user was ever in wait period - if yes, ALWAYS show SecondClosurePopup
+boolean wasInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
+
+log.info("Wait period history check - Previously in wait period: {}", wasInWaitPeriod);
+
+if (wasInWaitPeriod) {
+    // User was previously in wait period - ALWAYS show SecondClosurePopup for ANY closure count
+    log.info("User {} was previously in wait period. ALWAYS showing SecondClosurePopup for campaign {} (closure count: {})", 
+            userId, campaignId, closure.getClosureCount());
+    response.setAction("PROMPT_GLOBAL_PREFERENCE");
+    response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
+    response.setRequiresUserInput(true);
+    response.setIsGlobalPrompt(true);
     
-    log.info("Wait period status - Previously: {}, Currently: {}", wasInWaitPeriod, isCurrentlyInWaitPeriod);
-
+} else {
+    // User has NEVER been in wait period - use original logic
     if (closure.getClosureCount() == 1) {
-        // FIRST CLOSURE
-        if (wasInWaitPeriod || isCurrentlyInWaitPeriod) {
-            // User was previously in wait period OR is currently in one
-            // Show SECOND closure popup (global options) immediately on first closure
-            log.info("FIRST closure for user {} who was previously in wait period. Showing SecondClosurePopup for campaign {}", 
-                    userId, campaignId);
-            response.setAction("PROMPT_GLOBAL_PREFERENCE");
-            response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
-            response.setRequiresUserInput(true);
-            response.setIsGlobalPrompt(true);
-        } else {
-            // User has never been in waiting period - record closure but don't block
-            log.info("FIRST closure for new user {}. Campaign remains eligible based on normal rules.", userId);
-            closure.setFirstClosureDate(effectiveDate);
-            response.setAction("RECORDED_FIRST_CLOSURE");
-            response.setMessage("Closure recorded. Campaign remains available based on normal eligibility rules.");
-            response.setRequiresUserInput(false);
-        }
-        
-    } else if (closure.getClosureCount() == 2) {
-        // SECOND CLOSURE
-        if (wasInWaitPeriod || isCurrentlyInWaitPeriod) {
-            // User was previously in wait period - ALWAYS show SecondClosurePopup
-            log.info("SECOND closure for user {} who was previously in wait period. Showing SecondClosurePopup for campaign {}", 
-                    userId, campaignId);
-            response.setAction("PROMPT_GLOBAL_PREFERENCE");
-            response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
-            response.setRequiresUserInput(true);
-            response.setIsGlobalPrompt(true);
-        } else {
-            // User has never been in waiting period - show FirstClosurePopup
-            log.info("SECOND closure for user {} who has never been in wait period. Showing FirstClosurePopup for campaign {}", 
-                    userId, campaignId);
-            response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
-            response.setMessage("Would you like to see this campaign again in the future?");
-            response.setRequiresUserInput(true);
-            response.setIsGlobalPrompt(false);
-        }
+        // First closure for new user - just record it
+        log.info("FIRST closure for new user {}. Campaign remains eligible based on normal rules.", userId);
+        closure.setFirstClosureDate(effectiveDate);
+        response.setAction("RECORDED_FIRST_CLOSURE");
+        response.setMessage("Closure recorded. Campaign remains available based on normal eligibility rules.");
+        response.setRequiresUserInput(false);
         
     } else {
-        // MULTIPLE CLOSURES (3+): For users who were in wait period, always show SecondClosurePopup
-        if (wasInWaitPeriod || isCurrentlyInWaitPeriod) {
-            log.info("MULTIPLE closures ({}) for user {} who was previously in wait period. Showing SecondClosurePopup for campaign {}", 
-                    closure.getClosureCount(), userId, campaignId);
-            response.setAction("PROMPT_GLOBAL_PREFERENCE");
-            response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
-            response.setRequiresUserInput(true);
-            response.setIsGlobalPrompt(true);
-        } else {
-            // User has never been in waiting period - show FirstClosurePopup
-            log.info("MULTIPLE closures ({}) for user {} who has never been in wait period. Showing FirstClosurePopup for campaign {}", 
-                    closure.getClosureCount(), userId, campaignId);
-            response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
-            response.setMessage("Would you like to see this campaign again in the future?");
-            response.setRequiresUserInput(true);
-            response.setIsGlobalPrompt(false);
-        }
+        // Second+ closure for new user - show FirstClosurePopup
+        log.info("MULTIPLE closures ({}) for new user {}. Showing FirstClosurePopup for campaign {}", 
+                closure.getClosureCount(), userId, campaignId);
+        response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
+        response.setMessage("Would you like to see this campaign again in the future?");
+        response.setRequiresUserInput(true);
+        response.setIsGlobalPrompt(false);
     }
+}
 
-    closure.setUpdatedDate(effectiveDate);
-    closureRepository.save(closure);
-    return response;
+closure.setUpdatedDate(effectiveDate);
+closureRepository.save(closure);
+return response;
 }
     
     /**
@@ -258,6 +227,9 @@ public InsightClosureResponseDTO recordInsightClosure(String userId, String comp
         preference.setGlobalWaitReason(reason);
         preference.setUpdatedDate(effectiveDate);
         
+        // CRITICAL: Set the flag to remember this user was in wait period
+        preference.setHasBeenInWaitPeriod(true);
+        
         // Keep insights enabled (this is just a temporary wait, not opt-out)
         if (preference.getInsightsEnabled() == null) {
             preference.setInsightsEnabled(true);
@@ -265,7 +237,7 @@ public InsightClosureResponseDTO recordInsightClosure(String userId, String comp
         
         try {
             globalPreferenceRepository.save(preference);
-            log.info("Successfully set 1-month wait until {} for ALL campaigns (user {}, company {}) using UserGlobalPreference", 
+            log.info("Successfully set 1-month wait until {} for ALL campaigns (user {}, company {}) and marked hasBeenInWaitPeriod=true", 
                     waitUntilDate, userId, companyId);
         } catch (Exception e) {
             log.error("Error saving global preference for wait period: {}", e.getMessage(), e);
@@ -321,26 +293,53 @@ public InsightClosureResponseDTO recordInsightClosure(String userId, String comp
         Optional<UserGlobalPreference> prefOpt = globalPreferenceRepository.findByUserId(userId);
         if (prefOpt.isPresent()) {
             UserGlobalPreference pref = prefOpt.get();
+            
+            // Check explicit flag first
+            if (pref.getHasBeenInWaitPeriod() != null && pref.getHasBeenInWaitPeriod()) {
+                log.info("User {} has explicit hasBeenInWaitPeriod flag set to true", userId);
+                log.info("=== PREVIOUS WAIT PERIOD: TRUE (EXPLICIT FLAG) ===");
+                return true;
+            }
+            
+            // Fallback to checking globalWaitUntilDate
             if (pref.getGlobalWaitUntilDate() != null) {
                 // User had a global wait period set at some point
                 log.info("User {} had global wait period until {} (expired: {})", 
                         userId, pref.getGlobalWaitUntilDate(), 
                         pref.getGlobalWaitUntilDate().before(checkDate));
+                
+                // Set the flag for future checks if it's not already set
+                if (pref.getHasBeenInWaitPeriod() == null || !pref.getHasBeenInWaitPeriod()) {
+                    pref.setHasBeenInWaitPeriod(true);
+                    globalPreferenceRepository.save(pref);
+                    log.info("Updated hasBeenInWaitPeriod flag for user {}", userId);
+                }
+                
                 log.info("=== PREVIOUS WAIT PERIOD: TRUE (GLOBAL PREFERENCE) ===");
                 return true;
             }
+        } else {
+            log.info("User {} has no global preference record", userId);
         }
         
         // Also check individual campaigns for any previous 1-month waits (legacy support)
         List<UserInsightClosure> closures = closureRepository
                 .findByUserIdAndCompanyId(userId, companyId);
         
+        log.info("Found {} closure records for user {} in company {}", closures.size(), userId, companyId);
+        
         for (UserInsightClosure closure : closures) {
+            log.info("Checking closure for campaign {}: nextEligibleDate={}, permanentlyClosed={}", 
+                    closure.getCampaignId(), closure.getNextEligibleDate(), closure.getPermanentlyClosed());
+            
             if (closure.getNextEligibleDate() != null) {
                 // Check if this was a short-term wait (1-month) vs permanent block (10+ years)
                 Calendar farFuture = Calendar.getInstance();
                 farFuture.add(Calendar.YEAR, 5); // 5+ years is considered permanent
                 boolean isPermanentBlock = closure.getNextEligibleDate().after(farFuture.getTime());
+                
+                log.info("Campaign {} nextEligibleDate: {}, isPermanentBlock: {}", 
+                        closure.getCampaignId(), closure.getNextEligibleDate(), isPermanentBlock);
                 
                 if (!isPermanentBlock) {
                     // This was a 1-month wait period (could be expired or active)
@@ -350,6 +349,19 @@ public InsightClosureResponseDTO recordInsightClosure(String userId, String comp
                     log.info("=== PREVIOUS WAIT PERIOD: TRUE (CAMPAIGN-SPECIFIC) ===");
                     return true;
                 }
+            }
+        }
+        
+        // ADDITIONAL CHECK: Look for any closure records with closureReason indicating wait period
+        for (UserInsightClosure closure : closures) {
+            if (closure.getClosureReason() != null && 
+                (closure.getClosureReason().contains("1-month wait") || 
+                 closure.getClosureReason().contains("month wait") ||
+                 closure.getClosureReason().contains("show in future"))) {
+                log.info("User {} has closure reason indicating previous wait period: {}", 
+                        userId, closure.getClosureReason());
+                log.info("=== PREVIOUS WAIT PERIOD: TRUE (REASON TEXT) ===");
+                return true;
             }
         }
         
