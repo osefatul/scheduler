@@ -50,109 +50,113 @@ public class UserInsightClosureService {
      * FIXED: Proper logic for weekly rotation system with waiting periods
      */
     @Transactional
-public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
-        String campaignId, Date effectiveDate) throws DataHandlingException {
-
-    log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
-            userId, companyId, campaignId, effectiveDate);
-
-    // Check if user has global opt-out
-    if (isUserGloballyOptedOut(userId, effectiveDate)) {
-        throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
-                "User has opted out of all insights");
-    }
-
-    // Find or create closure record
-    UserInsightClosure closure = closureRepository
-            .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
-            .orElse(createNewClosure(userId, companyId, campaignId));
-
-    // Check if user was previously in wait period
-    boolean wasInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
-    boolean isCurrentlyInWaitPeriod = isUserInWaitPeriod(userId, companyId, effectiveDate);
+    public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
+            String campaignId, Date effectiveDate) throws DataHandlingException {
     
-    log.info("Wait period status - Previously: {}, Currently: {}", wasInWaitPeriod, isCurrentlyInWaitPeriod);
-
-    InsightClosureResponseDTO response = new InsightClosureResponseDTO();
-    response.setCampaignId(campaignId);
-    response.setEffectiveDate(effectiveDate);
-
-    // SIMPLE LOGIC: For users who were in wait period and are now out, reset closure behavior
-    if (wasInWaitPeriod && !isCurrentlyInWaitPeriod) {
-        // User was in wait period but now it's expired - use special post-wait-period logic
-        
-        // Check if this campaign has been handled in post-wait-period mode
-        boolean isPostWaitPeriodHandled = isPostWaitPeriodCampaignHandled(userId, companyId, campaignId, effectiveDate);
-        
-        if (!isPostWaitPeriodHandled) {
-            // First closure in post-wait-period mode - ALWAYS hide banner
-            log.info("POST-WAIT-PERIOD: First closure for campaign {} - hiding banner", campaignId);
-            
-            // Mark this campaign as handled in post-wait-period mode
-            markPostWaitPeriodCampaignHandled(userId, companyId, campaignId, effectiveDate);
-            
-            response.setClosureCount(1); // Always report as 1 for post-wait-period first closure
-            response.setAction("RECORDED_FIRST_CLOSURE");
-            response.setMessage("Closure recorded. Banner hidden for this session.");
-            response.setRequiresUserInput(false);
-            
-        } else {
-            // Second+ closure in post-wait-period mode - show SecondClosurePopup
-            log.info("POST-WAIT-PERIOD: Second+ closure for campaign {} - showing SecondClosurePopup", campaignId);
-            
-            closure.setClosureCount(closure.getClosureCount() + 1);
-            closure.setLastClosureDate(effectiveDate);
-            
-            response.setClosureCount(closure.getClosureCount());
-            response.setAction("PROMPT_GLOBAL_PREFERENCE");
-            response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
-            response.setRequiresUserInput(true);
-            response.setIsGlobalPrompt(true);
+        log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
+                userId, companyId, campaignId, effectiveDate);
+    
+        // CRITICAL FIX: Clean up any duplicate records before processing
+        ensureNoDuplicateRecords(userId, companyId, campaignId);
+    
+        // Check if user has global opt-out
+        if (isUserGloballyOptedOut(userId, effectiveDate)) {
+            throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
+                    "User has opted out of all insights");
         }
+    
+        // Find or create closure record
+        UserInsightClosure closure = closureRepository
+                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
+                .orElse(createNewClosure(userId, companyId, campaignId));
+    
+        // Check if user was previously in wait period
+        boolean wasInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
+        boolean isCurrentlyInWaitPeriod = isUserInWaitPeriod(userId, companyId, effectiveDate);
         
-    } else {
-        // Normal logic for users who haven't been in wait period OR are currently in wait period
-        
-        // Increment closure count
-        closure.setClosureCount(closure.getClosureCount() + 1);
-        closure.setLastClosureDate(effectiveDate);
-        response.setClosureCount(closure.getClosureCount());
-
-        if (closure.getClosureCount() == 1) {
-            // FIRST CLOSURE: Hide banner
-            log.info("FIRST closure for user {}. Hiding banner (closure count: {})", 
-                    userId, closure.getClosureCount());
-            closure.setFirstClosureDate(effectiveDate);
-            response.setAction("RECORDED_FIRST_CLOSURE");
-            response.setMessage("Closure recorded. Banner hidden for this session.");
-            response.setRequiresUserInput(false);
+        log.info("Wait period status - Previously: {}, Currently: {}", wasInWaitPeriod, isCurrentlyInWaitPeriod);
+    
+        InsightClosureResponseDTO response = new InsightClosureResponseDTO();
+        response.setCampaignId(campaignId);
+        response.setEffectiveDate(effectiveDate);
+    
+        // SIMPLE LOGIC: For users who were in wait period and are now out, reset closure behavior
+        if (wasInWaitPeriod && !isCurrentlyInWaitPeriod) {
+            // User was in wait period but now it's expired - use special post-wait-period logic
             
-        } else {
-            // SECOND+ CLOSURE: Show appropriate popup
-            if (wasInWaitPeriod) {
-                // User was in wait period (but still is) - show SecondClosurePopup
-                log.info("SECOND+ closure ({}) for user {} who was in wait period. Showing SecondClosurePopup", 
-                        closure.getClosureCount(), userId);
+            // Check if this campaign has been handled in post-wait-period mode
+            boolean isPostWaitPeriodHandled = isPostWaitPeriodCampaignHandled(userId, companyId, campaignId, effectiveDate);
+            
+            if (!isPostWaitPeriodHandled) {
+                // First closure in post-wait-period mode - ALWAYS hide banner
+                log.info("POST-WAIT-PERIOD: First closure for campaign {} - hiding banner", campaignId);
+                
+                // Mark this campaign as handled in post-wait-period mode
+                markPostWaitPeriodCampaignHandled(userId, companyId, campaignId, effectiveDate);
+                
+                response.setClosureCount(1); // Always report as 1 for post-wait-period first closure
+                response.setAction("RECORDED_FIRST_CLOSURE");
+                response.setMessage("Closure recorded. Banner hidden for this session.");
+                response.setRequiresUserInput(false);
+                
+            } else {
+                // Second+ closure in post-wait-period mode - show SecondClosurePopup
+                log.info("POST-WAIT-PERIOD: Second+ closure for campaign {} - showing SecondClosurePopup", campaignId);
+                
+                closure.setClosureCount(closure.getClosureCount() + 1);
+                closure.setLastClosureDate(effectiveDate);
+                
+                response.setClosureCount(closure.getClosureCount());
                 response.setAction("PROMPT_GLOBAL_PREFERENCE");
                 response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
                 response.setRequiresUserInput(true);
                 response.setIsGlobalPrompt(true);
+            }
+            
+        } else {
+            // Normal logic for users who haven't been in wait period OR are currently in wait period
+            
+            // Increment closure count
+            closure.setClosureCount(closure.getClosureCount() + 1);
+            closure.setLastClosureDate(effectiveDate);
+            response.setClosureCount(closure.getClosureCount());
+    
+            if (closure.getClosureCount() == 1) {
+                // FIRST CLOSURE: Hide banner
+                log.info("FIRST closure for user {}. Hiding banner (closure count: {})", 
+                        userId, closure.getClosureCount());
+                closure.setFirstClosureDate(effectiveDate);
+                response.setAction("RECORDED_FIRST_CLOSURE");
+                response.setMessage("Closure recorded. Banner hidden for this session.");
+                response.setRequiresUserInput(false);
+                
             } else {
-                // User has never been in wait period - show FirstClosurePopup
-                log.info("SECOND+ closure ({}) for user {} who has never been in wait period. Showing FirstClosurePopup", 
-                        closure.getClosureCount(), userId);
-                response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
-                response.setMessage("Would you like to see this campaign again in the future?");
-                response.setRequiresUserInput(true);
-                response.setIsGlobalPrompt(false);
+                // SECOND+ CLOSURE: Show appropriate popup
+                if (wasInWaitPeriod) {
+                    // User was in wait period (but still is) - show SecondClosurePopup
+                    log.info("SECOND+ closure ({}) for user {} who was in wait period. Showing SecondClosurePopup", 
+                            closure.getClosureCount(), userId);
+                    response.setAction("PROMPT_GLOBAL_PREFERENCE");
+                    response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
+                    response.setRequiresUserInput(true);
+                    response.setIsGlobalPrompt(true);
+                } else {
+                    // User has never been in wait period - show FirstClosurePopup
+                    log.info("SECOND+ closure ({}) for user {} who has never been in wait period. Showing FirstClosurePopup", 
+                            closure.getClosureCount(), userId);
+                    response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
+                    response.setMessage("Would you like to see this campaign again in the future?");
+                    response.setRequiresUserInput(true);
+                    response.setIsGlobalPrompt(false);
+                }
             }
         }
+    
+        closure.setUpdatedDate(effectiveDate);
+        closureRepository.save(closure);
+        return response;
     }
-
-    closure.setUpdatedDate(effectiveDate);
-    closureRepository.save(closure);
-    return response;
-}
+    
     
     /**
      * Handle user's response to preference prompt (backward compatible)
@@ -885,40 +889,53 @@ log.info("Marked campaign {} as closed since wait period expired for user {}", c
 private boolean isPostWaitPeriodCampaignHandled(String userId, String companyId, 
         String campaignId, Date currentDate) {
     
-    Optional<UserGlobalPreference> prefOpt = globalPreferenceRepository.findByUserId(userId);
-    if (!prefOpt.isPresent()) {
+    try {
+        Optional<UserGlobalPreference> prefOpt = globalPreferenceRepository.findByUserId(userId);
+        if (!prefOpt.isPresent()) {
+            return false;
+        }
+        
+        UserGlobalPreference pref = prefOpt.get();
+        
+        // Check if we're still in wait period
+        Date waitPeriodEndDate = pref.getGlobalWaitUntilDate();
+        if (waitPeriodEndDate == null || waitPeriodEndDate.after(currentDate)) {
+            return false; // Still in wait period or no wait period
+        }
+        
+        // FIXED: Get all closure records for this user/company and filter by campaign
+        List<UserInsightClosure> closures = closureRepository
+                .findByUserIdAndCompanyId(userId, companyId)
+                .stream()
+                .filter(c -> c.getCampaignId().equals(campaignId))
+                .collect(Collectors.toList());
+        
+        if (closures.isEmpty()) {
+            return false; // No closure record
+        }
+        
+        if (closures.size() > 1) {
+            log.warn("Multiple closure records found for campaign {} user {}. Checking all for post-wait-period marker.", 
+                    campaignId, userId);
+        }
+        
+        // Check if ANY of the closure records has the post-wait-period marker
+        for (UserInsightClosure closure : closures) {
+            if (closure.getClosureReason() != null && 
+                closure.getClosureReason().contains("POST_WAIT_PERIOD_HANDLED")) {
+                log.debug("Campaign {} already handled in post-wait-period mode for user {}", campaignId, userId);
+                return true;
+            }
+        }
+        
+        return false;
+        
+    } catch (Exception e) {
+        log.error("Error checking if campaign {} is post-wait-period handled for user {}: {}", 
+                campaignId, userId, e.getMessage(), e);
+        // Default to false if there's an error
         return false;
     }
-    
-    UserGlobalPreference pref = prefOpt.get();
-    
-    // Check if we have a list of campaigns handled in post-wait-period mode
-    // We'll store this as a JSON string in a new field, but for now use existing fields
-    
-    // Simple approach: Check if campaign was closed after wait period ended
-    Date waitPeriodEndDate = pref.getGlobalWaitUntilDate();
-    if (waitPeriodEndDate == null || waitPeriodEndDate.after(currentDate)) {
-        return false; // Still in wait period or no wait period
-    }
-    
-    // Check closure record for this campaign
-    Optional<UserInsightClosure> closureOpt = closureRepository
-            .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
-    
-    if (!closureOpt.isPresent()) {
-        return false; // No closure record
-    }
-    
-    UserInsightClosure closure = closureOpt.get();
-    
-    // Check if this campaign has a marker indicating post-wait-period handling
-    if (closure.getClosureReason() != null && 
-        closure.getClosureReason().contains("POST_WAIT_PERIOD_HANDLED")) {
-        log.debug("Campaign {} already handled in post-wait-period mode for user {}", campaignId, userId);
-        return true;
-    }
-    
-    return false;
 }
 
 /**
@@ -927,11 +944,26 @@ private boolean isPostWaitPeriodCampaignHandled(String userId, String companyId,
 private void markPostWaitPeriodCampaignHandled(String userId, String companyId, 
         String campaignId, Date currentDate) {
     
-    Optional<UserInsightClosure> closureOpt = closureRepository
-            .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId);
-    
-    if (closureOpt.isPresent()) {
-        UserInsightClosure closure = closureOpt.get();
+    try {
+        // CRITICAL FIX: Use findFirst to handle potential duplicates gracefully
+        List<UserInsightClosure> closures = closureRepository
+                .findByUserIdAndCompanyId(userId, companyId)
+                .stream()
+                .filter(c -> c.getCampaignId().equals(campaignId))
+                .collect(Collectors.toList());
+        
+        if (closures.isEmpty()) {
+            log.error("No closure record found for campaign {} when trying to mark as post-wait-period handled", campaignId);
+            return;
+        }
+        
+        if (closures.size() > 1) {
+            log.warn("Multiple closure records found for campaign {}. Using the most recent one.", campaignId);
+            // Use the one with the most recent update date
+            closures.sort((c1, c2) -> c2.getUpdatedDate().compareTo(c1.getUpdatedDate()));
+        }
+        
+        UserInsightClosure closure = closures.get(0);
         
         // Add marker to indicate this campaign was handled in post-wait-period mode
         String existingReason = closure.getClosureReason();
@@ -944,24 +976,146 @@ private void markPostWaitPeriodCampaignHandled(String userId, String companyId,
         closureRepository.save(closure);
         
         log.info("Marked campaign {} as handled in post-wait-period mode for user {}", campaignId, userId);
-    } else {
-        // Create new closure record with the marker
-        UserInsightClosure newClosure = createNewClosure(userId, companyId, campaignId);
-        newClosure.setClosureReason("POST_WAIT_PERIOD_HANDLED on " + currentDate);
-        newClosure.setClosureCount(0); // Will be incremented later
-        newClosure.setUpdatedDate(currentDate);
         
-        closureRepository.save(newClosure);
-        
-        log.info("Created new closure record for campaign {} marked as post-wait-period handled for user {}", 
-                campaignId, userId);
+    } catch (Exception e) {
+        log.error("Error marking campaign {} as post-wait-period handled for user {}: {}", 
+                campaignId, userId, e.getMessage(), e);
+        // Don't throw exception - this is not critical for the main flow
     }
 }
 
 
 
+@Transactional
+public void cleanupDuplicateClosureRecords(String userId, String companyId, String campaignId) {
+    try {
+        log.info("Cleaning up duplicate closure records for user: {}, company: {}, campaign: {}", 
+                userId, companyId, campaignId);
+        
+        List<UserInsightClosure> allClosures = closureRepository
+                .findByUserIdAndCompanyId(userId, companyId)
+                .stream()
+                .filter(c -> c.getCampaignId().equals(campaignId))
+                .collect(Collectors.toList());
+        
+        if (allClosures.size() <= 1) {
+            log.info("No duplicates found for campaign {}", campaignId);
+            return;
+        }
+        
+        log.warn("Found {} duplicate closure records for campaign {}. Merging them.", 
+                allClosures.size(), campaignId);
+        
+        // Sort by update date (most recent first)
+        allClosures.sort((c1, c2) -> {
+            Date d1 = c1.getUpdatedDate() != null ? c1.getUpdatedDate() : c1.getLastClosureDate();
+            Date d2 = c2.getUpdatedDate() != null ? c2.getUpdatedDate() : c2.getLastClosureDate();
+            if (d1 == null && d2 == null) return 0;
+            if (d1 == null) return 1;
+            if (d2 == null) return -1;
+            return d2.compareTo(d1); // Most recent first
+        });
+        
+        // Keep the most recent record, merge data from others
+        UserInsightClosure primaryRecord = allClosures.get(0);
+        
+        // Merge data from other records
+        int maxClosureCount = primaryRecord.getClosureCount();
+        Date earliestFirstClosure = primaryRecord.getFirstClosureDate();
+        Date latestClosure = primaryRecord.getLastClosureDate();
+        String combinedReason = primaryRecord.getClosureReason();
+        Boolean permanentlyClosed = primaryRecord.getPermanentlyClosed();
+        Date nextEligibleDate = primaryRecord.getNextEligibleDate();
+        
+        for (int i = 1; i < allClosures.size(); i++) {
+            UserInsightClosure duplicate = allClosures.get(i);
+            
+            // Take the highest closure count
+            if (duplicate.getClosureCount() > maxClosureCount) {
+                maxClosureCount = duplicate.getClosureCount();
+            }
+            
+            // Take the earliest first closure date
+            if (duplicate.getFirstClosureDate() != null && 
+                (earliestFirstClosure == null || duplicate.getFirstClosureDate().before(earliestFirstClosure))) {
+                earliestFirstClosure = duplicate.getFirstClosureDate();
+            }
+            
+            // Take the latest closure date
+            if (duplicate.getLastClosureDate() != null && 
+                (latestClosure == null || duplicate.getLastClosureDate().after(latestClosure))) {
+                latestClosure = duplicate.getLastClosureDate();
+            }
+            
+            // Combine closure reasons
+            if (duplicate.getClosureReason() != null && 
+                (combinedReason == null || !combinedReason.contains(duplicate.getClosureReason()))) {
+                combinedReason = (combinedReason != null ? combinedReason + "; " : "") + duplicate.getClosureReason();
+            }
+            
+            // Take permanent closed if any record has it
+            if (duplicate.getPermanentlyClosed() != null && duplicate.getPermanentlyClosed()) {
+                permanentlyClosed = true;
+            }
+            
+            // Take the later next eligible date (more restrictive)
+            if (duplicate.getNextEligibleDate() != null && 
+                (nextEligibleDate == null || duplicate.getNextEligibleDate().after(nextEligibleDate))) {
+                nextEligibleDate = duplicate.getNextEligibleDate();
+            }
+        }
+        
+        // Update primary record with merged data
+        primaryRecord.setClosureCount(maxClosureCount);
+        primaryRecord.setFirstClosureDate(earliestFirstClosure);
+        primaryRecord.setLastClosureDate(latestClosure);
+        primaryRecord.setClosureReason(combinedReason);
+        primaryRecord.setPermanentlyClosed(permanentlyClosed);
+        primaryRecord.setNextEligibleDate(nextEligibleDate);
+        primaryRecord.setUpdatedDate(new Date());
+        
+        // Save the merged primary record
+        closureRepository.save(primaryRecord);
+        
+        // Delete the duplicate records
+        for (int i = 1; i < allClosures.size(); i++) {
+            closureRepository.delete(allClosures.get(i));
+            log.info("Deleted duplicate closure record {} for campaign {}", 
+                    allClosures.get(i).getId(), campaignId);
+        }
+        
+        log.info("Successfully cleaned up duplicates for campaign {}. Merged into record: {}", 
+                campaignId, primaryRecord.getId());
+        
+    } catch (Exception e) {
+        log.error("Error cleaning up duplicate closure records for campaign {}: {}", 
+                campaignId, e.getMessage(), e);
+        // Don't throw - this is cleanup, not critical
+    }
+}
 
-
+/**
+ * Check for and clean up any duplicate records before processing
+ * Call this at the beginning of recordInsightClosure
+ */
+private void ensureNoDuplicateRecords(String userId, String companyId, String campaignId) {
+    try {
+        List<UserInsightClosure> closures = closureRepository
+                .findByUserIdAndCompanyId(userId, companyId)
+                .stream()
+                .filter(c -> c.getCampaignId().equals(campaignId))
+                .collect(Collectors.toList());
+        
+        if (closures.size() > 1) {
+            log.warn("Detected {} duplicate closure records for campaign {}. Cleaning up.", 
+                    closures.size(), campaignId);
+            cleanupDuplicateClosureRecords(userId, companyId, campaignId);
+        }
+    } catch (Exception e) {
+        log.error("Error checking for duplicate records: {}", e.getMessage(), e);
+        // Continue processing even if cleanup fails
+    }
+}
 
 
 
