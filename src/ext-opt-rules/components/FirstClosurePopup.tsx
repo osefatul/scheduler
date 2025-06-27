@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect } from "react";
 import USBModal, {
   ModalHeader,
@@ -7,7 +8,7 @@ import USBModal, {
 import Button from "@usb-shield/react-button";
 import { businessOptions } from "./BannerselectOptions";
 import PopupCloseandShowBanner from "./PopupCloseandShow";
-import SharedModal from "../../../../../packages/shared/src/utils/SharedBannerContent"
+import SharedModal from "../../../../../packages/shared/src/utils/SharedBannerContent";
 
 import { ExternalBannerPopup } from "./bannerpopup.styles";
 import { useSetClosurePreferenceMutation } from "@/external/services/campaignClosureAPI";
@@ -24,7 +25,6 @@ interface FirstClosurePopupProps {
   onPreferenceComplete?: () => void;
 }
 
-// Global state for success popup to render outside banner hierarchy
 declare global {
   interface Window {
     globalSuccessPopupState: {
@@ -35,46 +35,45 @@ declare global {
   }
 }
 
-// Global component that renders outside any banner
 export const GlobalSuccessPopup: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
     const checkGlobalState = () => {
-      if (typeof window !== 'undefined' && window.globalSuccessPopupState) {
+      if (typeof window !== "undefined" && window.globalSuccessPopupState) {
         if (window.globalSuccessPopupState.isOpen !== isOpen) {
-          console.log('GlobalSuccessPopup: State changed:', window.globalSuccessPopupState);
           setIsOpen(window.globalSuccessPopupState.isOpen);
           setMessage(window.globalSuccessPopupState.message);
         }
       }
     };
 
-    // Check immediately
     checkGlobalState();
 
-    // Set up interval to check periodically
     const interval = setInterval(checkGlobalState, 100);
-    
-    // Also listen for custom events
+
     const handleStateChange = () => {
-      console.log('GlobalSuccessPopup: Received state change event');
       checkGlobalState();
     };
-    
-    window.addEventListener('globalSuccessPopupStateChanged', handleStateChange);
-    
+
+    window.addEventListener(
+      "globalSuccessPopupStateChanged",
+      handleStateChange
+    );
+
     return () => {
       clearInterval(interval);
-      window.removeEventListener('globalSuccessPopupStateChanged', handleStateChange);
+      window.removeEventListener(
+        "globalSuccessPopupStateChanged",
+        handleStateChange
+      );
     };
   }, [isOpen]);
 
   const handleClose = () => {
-    console.log('GlobalSuccessPopup: Closing popup');
     setIsOpen(false);
-    if (typeof window !== 'undefined' && window.globalSuccessPopupState) {
+    if (typeof window !== "undefined" && window.globalSuccessPopupState) {
       window.globalSuccessPopupState.isOpen = false;
       window.globalSuccessPopupState.onClose();
     }
@@ -108,7 +107,10 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
   const dateParam = queryParams.get("date");
   let effectiveDate: Date;
   if (dateParam && /^\d{8}$/.test(dateParam)) {
-    const formatted = `${dateParam.slice(0, 4)}-${dateParam.slice(4, 6)}-${dateParam.slice(6, 8)}`;
+    const formatted = `${dateParam.slice(0, 4)}-${dateParam.slice(
+      4,
+      6
+    )}-${dateParam.slice(6, 8)}`;
     effectiveDate = new Date(formatted);
   } else if (dateParam && !isNaN(Date.parse(dateParam))) {
     effectiveDate = new Date(dateParam);
@@ -120,31 +122,26 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
   const { recordClosure } = useSessionClosureManager();
 
   const showGlobalSuccessPopup = useCallback((message: string) => {
-    // Set global state that will be picked up by GlobalSuccessPopup
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       if (!window.globalSuccessPopupState) {
         window.globalSuccessPopupState = {
           isOpen: false,
           message: "",
-          onClose: () => {}
+          onClose: () => {},
         };
       }
-      
-      console.log('FirstClosurePopup: Setting global success popup state:', message);
+
       window.globalSuccessPopupState.isOpen = true;
       window.globalSuccessPopupState.message = message;
-      window.globalSuccessPopupState.onClose = () => {
-        console.log('FirstClosurePopup: Global success popup closed');
-      };
-      
-      // Force a state update by dispatching a custom event
-      window.dispatchEvent(new CustomEvent('globalSuccessPopupStateChanged'));
+      window.globalSuccessPopupState.onClose = () => {};
+
+      window.dispatchEvent(new CustomEvent("globalSuccessPopupStateChanged"));
     }
   }, []);
 
   const handleCloseAndShowLater = useCallback(async () => {
     if (!campaignId || !userId || !companyId) {
-      console.error('Missing required parameters for preference API');
+      console.error("Missing required parameters for preference API");
       return;
     }
 
@@ -155,43 +152,55 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
         userId,
         companyId,
         campaignId,
-        wantsToSee: true,       
+        wantsToSee: true,
         reason: "User chose to close temporarily",
-        isGlobalResponse: false,   
-        preferenceDate: effectiveDate.toISOString().split('T')[0]
+        isGlobalResponse: false,
+        preferenceDate: effectiveDate.toISOString().split("T")[0],
       }).unwrap();
 
-      // Record closure and close banner IMMEDIATELY
-      recordClosure(campaignId, userId, companyId, closureCount, 'TEMPORARY_CLOSE_SESSION');
-      
-      // Close the banner first
+      recordClosure(
+        campaignId,
+        userId,
+        companyId,
+        closureCount,
+        "TEMPORARY_CLOSE_SESSION"
+      );
+
       if (onPreferenceComplete) {
         onPreferenceComplete();
       }
-      
-      // Close this modal
+
       handleClose();
-      
-      // Show success popup using global state (outside banner hierarchy)
+
       setTimeout(() => {
-        showGlobalSuccessPopup("The banner has been closed for now and will be shown to you in a future session.");
+        showGlobalSuccessPopup(
+          "The banner has been closed for now and will be shown to you in a future session."
+        );
       }, 150);
-      
     } catch (error) {
-      console.error('Error setting preference:', error);
-      // Even on error, close the banner
+      console.error("Error setting preference:", error);
       if (onPreferenceComplete) {
         onPreferenceComplete();
       }
       handleClose();
-      
+
       setTimeout(() => {
         showGlobalSuccessPopup("The banner has been closed for now.");
       }, 150);
     } finally {
       setIsProcessing(false);
     }
-  }, [campaignId, userId, companyId, closureCount, setClosurePreference, recordClosure, onPreferenceComplete, handleClose, showGlobalSuccessPopup]);
+  }, [
+    campaignId,
+    userId,
+    companyId,
+    closureCount,
+    setClosurePreference,
+    recordClosure,
+    onPreferenceComplete,
+    handleClose,
+    showGlobalSuccessPopup,
+  ]);
 
   const handleDontShowAgainClick = useCallback(() => {
     setDontShowAgainPopupOpen(true);
@@ -199,31 +208,32 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
 
   const handleDontShowAgainOnSubmit = useCallback(async () => {
     setDontShowAgainPopupOpen(false);
-    
-    // Close banner and modal immediately
+
     if (onPreferenceComplete) {
       onPreferenceComplete();
     }
     handleClose();
-    
-    // Show success popup using global state
+
     setTimeout(() => {
-      showGlobalSuccessPopup("We won't show you this banner again.");
+      showGlobalSuccessPopup(
+        "The banner has been closed for now and won’t be shown to you in the future."
+      );
     }, 150);
   }, [onPreferenceComplete, handleClose, showGlobalSuccessPopup]);
 
   const handleDontShowAgainSubmit = useCallback(
     async (selectedReason: string | null, additionalComments: string) => {
       if (!campaignId || !userId || !companyId) {
-        // Close banner and modal even without API call
         if (onPreferenceComplete) {
           onPreferenceComplete();
         }
         setDontShowAgainPopupOpen(false);
         handleClose();
-        
+
         setTimeout(() => {
-          showGlobalSuccessPopup("We won't show you this banner again.");
+          showGlobalSuccessPopup(
+            "The banner has been closed for now and won’t be shown to you in the future."
+          );
         }, 150);
         return;
       }
@@ -240,10 +250,10 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
           userId,
           companyId,
           campaignId,
-          wantsToSee: false, 
+          wantsToSee: false,
           reason,
-          isGlobalResponse: false, 
-          preferenceDate: effectiveDate.toISOString().split('T')[0]
+          isGlobalResponse: false,
+          preferenceDate: effectiveDate.toISOString().split("T")[0],
         }).unwrap();
 
         recordClosure(
@@ -254,29 +264,30 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
           "PERMANENT_BLOCK"
         );
 
-        // Close banner and modal IMMEDIATELY after API success
         if (onPreferenceComplete) {
           onPreferenceComplete();
         }
         setDontShowAgainPopupOpen(false);
         handleClose();
-        
-        // Show success popup using global state
+
         setTimeout(() => {
-          showGlobalSuccessPopup("We won't show you this banner again.");
+          showGlobalSuccessPopup(
+            "The banner has been closed for now and won’t be shown to you in the future."
+          );
         }, 150);
       } catch (error) {
         console.error("Error setting preference:", error);
-        
-        // Even on error, close banner and modal
+
         if (onPreferenceComplete) {
           onPreferenceComplete();
         }
         setDontShowAgainPopupOpen(false);
         handleClose();
-        
+
         setTimeout(() => {
-          showGlobalSuccessPopup("We won't show you this banner again.");
+          showGlobalSuccessPopup(
+            "The banner has been closed for now and won’t be shown to you in the future."
+          );
         }, 150);
       } finally {
         setIsProcessing(false);
@@ -347,3 +358,4 @@ const FirstClosurePopup: React.FC<FirstClosurePopupProps> = ({
 };
 
 export default FirstClosurePopup;
+

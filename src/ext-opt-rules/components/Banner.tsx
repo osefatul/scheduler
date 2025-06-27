@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useCallback } from "react";
 import {
   ExternalPortalContainer,
@@ -5,6 +6,7 @@ import {
   LoadingIndicator,
   ErrorDisplay,
 } from "./Banner.styled";
+import { useNavigate } from "react-router-dom";
 import { USBBanner } from "../usb-banner";
 import { ButtonProps } from "./IBanner";
 import { useRotateCampaignNextQuery } from "@/external/services/campaignAPI";
@@ -13,7 +15,7 @@ import { useLocation } from "react-router-dom";
 import { useCheckOptOutStatusQuery } from "@/external/services/campaignClosureAPI";
 import { useCampaignSessionManager } from "@/external/utils/campaignSessionManager";
 import { useSessionClosureManager } from "@/external/utils/sessionClosureManager";
-import { GlobalSuccessPopup } from "../usb-banner/bannerpopup/FirstClosurePopup";
+import { GlobalSuccessPopup } from "../bannerpopup/FirstClosurePopup";
 
 export const createBanner = (campaign?: {
   insightSubType?: string;
@@ -33,20 +35,17 @@ export const createBanner = (campaign?: {
     companyId?: string;
   }) => {
     const [bannerHidden, setBannerHidden] = useState(false);
-
-    // Session closure management
     const { isCampaignClosed } = useSessionClosureManager();
-
-    // Check if user has globally opted out
     const { data: optOutResponse } = useCheckOptOutStatusQuery(userId || "", {
       skip: !userId,
     });
+    const routerNavigate = useNavigate();
 
     const navigate = (path: string, state?: any) => {
       if (onNavigate) {
         onNavigate(path, state);
       } else {
-        window.location.href = path;
+        routerNavigate(path, { state });
       }
     };
 
@@ -106,12 +105,10 @@ export const createBanner = (campaign?: {
       bannerHidden,
     ]);
 
-    // Handle banner closure callback - ONLY called when user COMPLETES preference flow
     const handleBannerClosed = useCallback(
       (campaignId: string) => {
         setBannerHidden(true);
 
-        // Also check session state to force hide
         if (userId && companyId) {
           const isClosedInSession = isCampaignClosed(
             campaignId,
@@ -130,7 +127,7 @@ export const createBanner = (campaign?: {
       label: "Get Started",
       emphasis: "heavy",
       ctaStyle: "standard",
-      onClick: () => console.log("Primary button clicked"),
+      onClick: () => {},
     };
 
     const secondaryButtonProps: ButtonProps = {
@@ -142,13 +139,14 @@ export const createBanner = (campaign?: {
           console.error("No product name available!");
           return;
         }
+
         const productName = encodeURIComponent(campaign.insightSubType);
-        navigate(`/learn-more?productname=${productName}`, {
-          state: {
-            insightSubType: campaign.insightSubType,
-            campaignId: campaign.campaignId,
-          },
-        });
+        const campaignId = encodeURIComponent(campaign?.id ?? "");
+        const user = encodeURIComponent(userId ?? "");
+        const company = encodeURIComponent(companyId ?? "");
+        navigate(
+          `/learn-more?productname=${productName}&campaignId=${campaignId}&userId=${user}&companyId=${company}`,
+        );
       },
     };
 
@@ -215,8 +213,7 @@ export const createBanner = (campaign?: {
             {renderBannerContent()}
           </ExternalPortalBannerContainer>
         </ExternalPortalContainer>
-        
-        {/* Global Success Popup - Renders outside banner hierarchy */}
+
         <GlobalSuccessPopup />
       </>
     );
@@ -233,7 +230,16 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
   const queryParams = new URLSearchParams(location.search);
   const userIdParam = queryParams.get("userId") || userId;
   const companyIdParam = queryParams.get("companyId");
-  const dateParam = queryParams.get("date");
+  let dateParam = queryParams.get("date");
+
+  // If no dateParam, use current date in YYYYMMDD format
+  if (!dateParam) {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    dateParam = `${yyyy}${mm}${dd}`;
+  }
 
   const isDCRSessionActive =
     sessionStorage.getItem("isDCRSessionActive") === "true";
@@ -248,7 +254,7 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
       : {
           username: userIdParam || "CORY",
           company: companyIdParam || "ABCCORP",
-          date: dateParam || "20250715",
+          date: dateParam,
         },
     { skip: shouldSkipAPI }
   );
@@ -265,12 +271,7 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
   }, [isDCRSessionActive, nextData, storeCampaignData, hasStoredCampaignData]);
 
   if (rotationError) {
-    return (
-      <>
-        {/* Still render global popup even if no banner */}
-        <GlobalSuccessPopup />
-      </>
-    );
+    return <GlobalSuccessPopup />;
   }
 
   let campaignToShow = null;
@@ -296,12 +297,7 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
     );
 
     if (isClosedInSession) {
-      return (
-        <>
-          {/* Still render global popup even if banner is closed */}
-          <GlobalSuccessPopup />
-        </>
-      );
+      return <GlobalSuccessPopup />;
     }
   }
 
@@ -319,24 +315,15 @@ const Banner: React.FC<BannerProps> = ({ onNavigate, userId }) => {
   }
 
   if (nextData?.success === false) {
-    return (
-      <>
-        {/* Still render global popup even if no campaign */}
-        <GlobalSuccessPopup />
-      </>
-    );
+    return <GlobalSuccessPopup />;
   }
 
   if (!isDCRSessionActive) {
   } else if (!hasStoredCampaignData()) {
   }
 
-  return (
-    <>
-      {/* Always render global popup */}
-      <GlobalSuccessPopup />
-    </>
-  );
+  return <GlobalSuccessPopup />;
 };
 
 export default Banner;
+

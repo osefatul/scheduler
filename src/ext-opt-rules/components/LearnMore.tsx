@@ -24,46 +24,44 @@ import {
   LetsTalkSectionContainer,
   BreadCumbbackspan,
   VedioText,
+  // VideoWrapper,
+  // VideoContainer,
 } from "./LearnMore.styled";
 import { USBIconArrowLeft } from "@usb-shield/react-icons";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useGetLearnMoreContentByProductsQuery } from "@/external/services/learnMoreAPI";
 import { Spinner } from "../spinner";
 import LearnMoreModal from "../modal/LearnMoreModal";
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { STATIC_CONTENT } from "./LearnMoreStaticContent";
-import { 
-  useCreateLeadMutation, 
-  useTrackWarmLeadMutation,
-  trackWarmLeadSafely,
+import {
   createHotLeadSafely,
+  HotLeadData,
+  trackWarmLeadSafely,
+  useCreateLeadMutation,
+  useTrackWarmLeadMutation,
   WarmLeadData,
-  HotLeadData 
 } from "@/external/services/LeadAPI";
-
-// Utility function to generate/get user identifier
-const getUserIdentifier = (): string | null => {
-  // Try to get existing id  from banner or USBBanner component:
-  let userIdentifier = localStorage.getItem('dcr_user_id');
-  
-  return userIdentifier;
-};
+import { useCampaignSessionManager } from "@/external/utils/campaignSessionManager";
 
 const LearnMorePage = () => {
   const [isOpen, setIsOpen] = useState(false);
+  const [isMarketoFormSubmitted, setIsMarketoFormSubmitted] = useState(false);
   const [warmLeadTracked, setWarmLeadTracked] = useState(false);
   const location = useLocation();
-  const { campaignId } = location.state || {};
   const navigate = useNavigate();
-  
   const searchParams = new URLSearchParams(location.search);
   const productName = searchParams.get("productname");
+  const campaignId = searchParams.get("campaignId");
+  const userId = searchParams.get("userId");
+  const companyId = searchParams.get("companyId");
+
+  const { clearCampaignData } = useCampaignSessionManager();
 
   const insightSubType = productName
     ? productName
     : (location.state as { insightSubType?: keyof typeof STATIC_CONTENT })
         ?.insightSubType || "FX";
-  
   const content =
     STATIC_CONTENT[insightSubType as keyof typeof STATIC_CONTENT] ||
     STATIC_CONTENT.VirtualPay;
@@ -75,11 +73,9 @@ const LearnMorePage = () => {
       skip: !dcr_isLearnMoreContentDynamic,
     }
   );
-  
   const [createLead] = useCreateLeadMutation();
   const [trackWarmLead] = useTrackWarmLeadMutation();
 
-  // Track warm lead on page load
   useEffect(() => {
     const trackPageVisit = async () => {
       if (!campaignId || warmLeadTracked) {
@@ -87,109 +83,89 @@ const LearnMorePage = () => {
       }
 
       try {
-        const userIdentifier = getUserIdentifier();
-        
         const warmLeadData: WarmLeadData = {
-          userIdentifier,
+          userId,
           campaignId,
           insightSubType,
         };
 
-        console.log('Tracking warm lead visit:', warmLeadData);
-        
         const success = await trackWarmLeadSafely(trackWarmLead, warmLeadData);
-        
+
         if (success) {
           setWarmLeadTracked(true);
-          // Store in sessionStorage to avoid multiple calls in same session
-          sessionStorage.setItem(`warm_lead_tracked_${campaignId}_${insightSubType}_${userIdentifier}`, 'true');
         }
-        
       } catch (error) {
-        console.error('Error tracking warm lead:', error);
+        console.error("Error tracking warm lead:", error);
       }
     };
 
-    // Check if already tracked in this session
-    const alreadyTracked = sessionStorage.getItem(`warm_lead_tracked_${campaignId}_${insightSubType}_${userIdentifier}`);
-    
-    if (!alreadyTracked) {
-      // Small delay to ensure page is fully loaded
-      const timer = setTimeout(trackPageVisit, 1000);
-      return () => clearTimeout(timer);
-    } else {
-      setWarmLeadTracked(true);
-    }
+    const timer = setTimeout(trackPageVisit, 1000);
+    return () => clearTimeout(timer);
   }, [campaignId, insightSubType, warmLeadTracked, trackWarmLead]);
 
-  // Update dynamic content flag
   if (dcr_isLearnMoreContentDynamic && (!data || data?.data?.length === 0)) {
     dcr_isLearnMoreContentDynamic = false;
   }
 
-  // Show loading spinner
-  if (isLoading) {
+  if (isLoading || isMarketoFormSubmitted) {
     return <Spinner />;
   }
 
-  // Don't render if still fetching dynamic content
   if (dcr_isLearnMoreContentDynamic && !data) {
     return null;
   }
 
   const handleClose = () => {
     setIsOpen(false);
-    navigate("/");
+    window.location.href = "/";
   };
 
   const handleTalkToRM = async () => {
-    console.log('Converting warm lead to hot lead...');
-    
+    setIsMarketoFormSubmitted(true);
+
     const sampleData = {
       FirstName: "John",
       LastName: "Doe",
       Email: "john.doe@usbank.com",
-      Company: "U.S. Bank",
+      Company: companyId,
       Phone: "123-456-7890",
+      corporateConnectInsight: insightSubType,
     };
-    
+
     const leadData: HotLeadData = {
       leadId: "",
       campaignId: campaignId,
       firstName: sampleData.FirstName,
       lastName: sampleData.LastName,
       emailAddress: sampleData.Email,
-      companyName: sampleData.Company,
+      companyName: sampleData.Company ?? "",
       phoneNumber: sampleData.Phone,
       comments: "Testing comments",
       marketingRelationshipType: "USBank",
-      corporateConnectionInsight: insightSubType,
-      userIdentifier: getUserIdentifier(), // Add user identifier for warm lead conversion
+      corporateConnectInsight: insightSubType,
+      userId,
     };
 
     const script = document.createElement("script");
-    script.src = "//uat-engage.usbank.com/js/forms2/js/forms2.min.js";
+    script.src = "https://uat-engage.usbank.com/js/forms2/js/forms2.min.js";
     script.async = true;
     script.onload = () => {
       // @ts-ignore: MktoForms2 is a global variable provided by the Marketo script
       MktoForms2.loadForm(
-        "//uat-engage.usbank.com",
+        "https://uat-engage.usbank.com",
         "866-CNF-351",
         1872,
         (form: any) => {
           form.vals(sampleData);
-          console.log("Form values set successfully");
 
-          form.onSuccess((values: any, followUpUrl: string) => {
-            console.log("Form submitted successfully: ", values);
+          form.onSuccess((_values: any, followUpUrl: string) => {
             const urlParams = new URLSearchParams(new URL(followUpUrl).search);
             const extractedID = urlParams.get("aliId");
             const leadId = extractedID || null;
-            
+
             if (!leadId) {
               console.error("leadId not found in form values");
             } else {
-              console.log("leadId: ", leadId);
               leadData.leadId = leadId;
               handleHotLeadCreation(leadData);
             }
@@ -204,22 +180,22 @@ const LearnMorePage = () => {
 
   const handleHotLeadCreation = async (leadData: HotLeadData) => {
     if (!leadData.campaignId || !leadData.leadId) {
-      console.log("Missing Lead ID or Campaign ID");
       return;
     }
 
     try {
-      // Create the hot lead (this will internally handle warm lead conversion)
       const response = await createHotLeadSafely(createLead, leadData);
-      
+
       if (response) {
-        console.log("Hot lead created successfully (converted from warm lead): ", response);
+        clearCampaignData();
         setIsOpen(true);
       } else {
         console.error("Failed to create hot lead");
       }
     } catch (error) {
       console.error("Error creating hot lead:", error);
+    } finally {
+      setIsMarketoFormSubmitted(false);
     }
   };
 
@@ -253,7 +229,6 @@ const LearnMorePage = () => {
         </SectionMainCard>
       );
     }
-    
     if (!dcr_isLearnMoreContentDynamic) {
       const { heading, subHeading, paragraph, image } = content.heroSection;
       return (
@@ -308,13 +283,23 @@ const LearnMorePage = () => {
         </SectionMainCard>
       );
     }
-    
     if (!dcr_isLearnMoreContentDynamic) {
       const { heading, paragraph, videoPoster } = content.mediaSection;
+
       return (
         <SectionMainCard>
           <VideoSectionContainer>
             <MediaSection>
+              {/* <VideoWrapper>
+              <VideoContainer>
+                <iframe
+                  src="https://players.brightcove.net/4924632599001/default_default/index.html"
+                  sandbox="allow-scripts allow-same-origin allow-popups"
+                  width="640"
+                  height="360"
+                ></iframe>
+              </VideoContainer>
+            </VideoWrapper> */}
               <VideoPlayer poster={videoPoster} controls>
                 <source src="" type="video/mp4" />
                 Your browser does not support the video tag.
@@ -365,6 +350,7 @@ const LearnMorePage = () => {
       );
     }
 
+    // Static content fallback
     if (!dcr_isLearnMoreContentDynamic) {
       const { heading, subHeading, benefits } = content.keyBenefitsSection;
       return (
@@ -396,7 +382,7 @@ const LearnMorePage = () => {
     <SectionMainCard className="letsTalkSection">
       <LetsTalkSectionContainer>
         <SectionHeading>
-          <StyledHeadingH2>Let's talk.</StyledHeadingH2>
+          <StyledHeadingH2>Let’s talk.</StyledHeadingH2>
           <StyledParagraph>
             Interested in learning more about embedded payments?
           </StyledParagraph>

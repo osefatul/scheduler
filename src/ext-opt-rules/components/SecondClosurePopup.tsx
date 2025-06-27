@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback } from "react";
 import USBModal, {
   ModalHeader,
@@ -45,14 +46,17 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
   const [sharedModalOptions, setSharedModalOptions] = useState(businessOptions);
   const [modalType, setModalType] = useState<"campaign" | "global">("campaign");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [hasSubmitted, setHasSubmitted] = useState(false); // Prevent duplicate submissions
+  const [hasSubmitted, setHasSubmitted] = useState(false);
 
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
   const dateParam = queryParams.get("date");
   let effectiveDate: Date;
   if (dateParam && /^\d{8}$/.test(dateParam)) {
-    const formatted = `${dateParam.slice(0, 4)}-${dateParam.slice(4, 6)}-${dateParam.slice(6, 8)}`;
+    const formatted = `${dateParam.slice(0, 4)}-${dateParam.slice(
+      4,
+      6
+    )}-${dateParam.slice(6, 8)}`;
     effectiveDate = new Date(formatted);
   } else if (dateParam && !isNaN(Date.parse(dateParam))) {
     effectiveDate = new Date(dateParam);
@@ -65,70 +69,66 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
 
   const showGlobalSuccessPopup = useCallback((message: string) => {
     // Use the same global state variable as FirstClosurePopup
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       // Make sure we're using the same global variable name as FirstClosurePopup
       if (!window.globalSuccessPopupState) {
         window.globalSuccessPopupState = {
           isOpen: false,
           message: "",
-          onClose: () => {}
+          onClose: () => {},
         };
       }
-      
-      console.log('SecondClosurePopup: Setting global success popup state:', message);
+
       window.globalSuccessPopupState.isOpen = true;
       window.globalSuccessPopupState.message = message;
-      window.globalSuccessPopupState.onClose = () => {
-        console.log('SecondClosurePopup: Global success popup closed');
-      };
-      
+      window.globalSuccessPopupState.onClose = () => {};
+
       // Force a state update by dispatching a custom event
-      window.dispatchEvent(new CustomEvent('globalSuccessPopupStateChanged'));
+      window.dispatchEvent(new CustomEvent("globalSuccessPopupStateChanged"));
     }
   }, []);
 
   const handleCloseButShowInFuture = useCallback(async () => {
-    console.log('SecondClosurePopup: User clicked "Close now but show in future"');
     setSharedModalOptions(businessOptions);
     setModalType("campaign");
     setSharedModalOpen(true);
-    console.log('SecondClosurePopup: Set modalType to "campaign"');
   }, []);
 
   const handleStopShowingAd = useCallback(() => {
-    console.log('SecondClosurePopup: User clicked "Stop showing this ad"');
     setSharedModalOptions(dontShowAgainOptions);
     setModalType("global");
     setSharedModalOpen(true);
-    console.log('SecondClosurePopup: Set modalType to "global"');
   }, []);
 
   const handleSharedModalSubmit = useCallback(
     async (selectedReason: string | null, additionalComments: string) => {
-      // Prevent duplicate submissions
       if (hasSubmitted || isProcessing) {
-        console.log('SecondClosurePopup: Duplicate submission prevented');
+        console.warn(
+          "Form already submitted or processing, ignoring further submissions."
+        );
         return;
       }
 
       if (!campaignId || !userId || !companyId) {
         console.error("Missing required parameters for preference API");
-        
+
         // Close banner and modals immediately even without API
         if (onPreferenceComplete) {
           onPreferenceComplete();
         }
         setSharedModalOpen(false);
         handleClose();
-        
+
         setTimeout(() => {
-          showGlobalSuccessPopup("We won't show you any banners anymore.");
+          showGlobalSuccessPopup(
+            "We won’t show you any banners in the future."
+          );
         }, 150);
         return;
       }
 
       setIsProcessing(true);
-      setHasSubmitted(true); // Mark as submitted
+      setHasSubmitted(true);
 
       try {
         const reason =
@@ -145,7 +145,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
             wantsToSee: true,
             reason,
             isGlobalResponse: true,
-            preferenceDate: effectiveDate.toISOString().split('T')[0]
+            preferenceDate: effectiveDate.toISOString().split("T")[0],
           }).unwrap();
 
           recordClosure(
@@ -156,9 +156,8 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
             "TEMPORARY_CLOSE_SESSION"
           );
 
-          // FIXED: Show "Preference updated" message for campaign type
-          successMessage = "Preference updated.";
-          console.log('SecondClosurePopup: Campaign type - setting message:', successMessage);
+          successMessage =
+            "The banner has been closed for now. We’ll show you relevant banners based on your choice in the future.";
         } else {
           // User chose "Stop showing this ad" (global opt-out)
           await setClosurePreference({
@@ -168,7 +167,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
             wantsToSee: false,
             reason,
             isGlobalResponse: true,
-            preferenceDate: effectiveDate.toISOString().split('T')[0]
+            preferenceDate: effectiveDate.toISOString().split("T")[0],
           }).unwrap();
 
           recordClosure(
@@ -178,10 +177,8 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
             closureCount,
             "GLOBAL_OPT_OUT"
           );
-          
-          // FIXED: Show "We won't show you any banners anymore" for global opt-out
-          successMessage = "We won't show you any banners anymore.";
-          console.log('SecondClosurePopup: Global type - setting message:', successMessage);
+
+          successMessage = "We won’t show you any banners in the future.";
         }
 
         // Close banner and modals IMMEDIATELY after API success
@@ -190,9 +187,9 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         }
         setSharedModalOpen(false);
         handleClose();
-        
+
         // Show success popup using global state
-        console.log('SecondClosurePopup: About to show popup with message:', successMessage);
+
         setTimeout(() => {
           showGlobalSuccessPopup(successMessage);
         }, 150);
@@ -205,19 +202,20 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         }
         setSharedModalOpen(false);
         handleClose();
-        
-        // FIXED: Show different error messages based on modal type
-        const errorMessage = modalType === "global" 
-          ? "We won't show you any banners anymore." 
-          : "Preference updated.";
-        
+
+        const errorMessage =
+          modalType === "global"
+            ? "We won’t show you any banners in the future."
+            : "The banner has been closed for now. We’ll show you relevant banners based on your choice in the future.";
+
         setTimeout(() => {
           showGlobalSuccessPopup(errorMessage);
         }, 150);
       } finally {
         setIsProcessing(false);
-        // Reset hasSubmitted after a delay to allow for potential future use
-        setTimeout(() => setHasSubmitted(false), 1000);
+        setTimeout(() => {
+          setHasSubmitted(false);
+        }, 500);
       }
     },
     [
@@ -236,17 +234,13 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
     ]
   );
 
-  const handleSharedModalOnSubmit = useCallback(async () => {
-    // This is called when user submits without selecting a specific reason
-    // To prevent duplicate API calls, we'll handle this differently
-    console.log('SecondClosurePopup: handleSharedModalOnSubmit called - skipping to prevent duplicate API call');
-    // Don't call handleSharedModalSubmit here to avoid duplicate API calls
-    // The SharedModal component should handle this through onProceed
-  }, []);
+  const handleSharedModalOnSubmit = useCallback(async () => {}, [
+    handleSharedModalSubmit,
+  ]);
 
   const handleSharedModalClose = useCallback(() => {
     setSharedModalOpen(false);
-    setHasSubmitted(false); // Reset submission state when modal closes
+    setHasSubmitted(false);
   }, []);
 
   return (
@@ -259,7 +253,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
         >
           <ModalHeader id="second-closure-header">Close banner?</ModalHeader>
           <ModalBody>
-            You've closed similar ads recently. Want to stop seeing these?
+          We’ve noticed you’re not interested in other products. Would you like to stop seeing them?
           </ModalBody>
           <ModalFooter>
             <Button
@@ -276,7 +270,7 @@ const SecondClosurePopup: React.FC<SecondClosurePopupProps> = ({
               handleClick={handleStopShowingAd}
               disabled={isProcessing}
             >
-              Stop showing this ad
+              Don’t show me any banners
             </Button>
           </ModalFooter>
         </USBModal>

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from "react";
 import { BannerProps } from "./IUSBBanner";
 import {
@@ -228,12 +229,10 @@ export const createUSBBanner = (): React.FC<EnhancedBannerProps> => {
       setIsSecondModalOpen(false);
     }, []);
 
-    // Don't render anything if banner is hidden and no modals are open
     if (isHidden && !isFirstModalOpen && !isSecondModalOpen) {
       return null;
     }
 
-    // Show banner unless explicitly hidden (even when modals are open)
     const shouldShowBanner = !isHidden;
 
     return (
