@@ -50,112 +50,117 @@ public class UserInsightClosureService {
      * FIXED: Proper logic for weekly rotation system with waiting periods
      */
     @Transactional
-    public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
-            String campaignId, Date effectiveDate) throws DataHandlingException {
+public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
+        String campaignId, Date effectiveDate) throws DataHandlingException {
+
+    log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
+            userId, companyId, campaignId, effectiveDate);
+
+    // Check if user has global opt-out
+    if (isUserGloballyOptedOut(userId, effectiveDate)) {
+        throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
+                "User has opted out of all insights");
+    }
+
+    // Check if user was previously in wait period and is now out
+    boolean wasInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
+    boolean isCurrentlyInWaitPeriod = isUserInWaitPeriod(userId, companyId, effectiveDate);
     
-        log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
-                userId, companyId, campaignId, effectiveDate);
-    
-        // CRITICAL FIX: Clean up any duplicate records before processing
-        ensureNoDuplicateRecords(userId, companyId, campaignId);
-    
-        // Check if user has global opt-out
-        if (isUserGloballyOptedOut(userId, effectiveDate)) {
-            throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
-                    "User has opted out of all insights");
+    log.info("Wait period status - Previously: {}, Currently: {}", wasInWaitPeriod, isCurrentlyInWaitPeriod);
+
+    InsightClosureResponseDTO response = new InsightClosureResponseDTO();
+    response.setCampaignId(campaignId);
+    response.setEffectiveDate(effectiveDate);
+
+    if (wasInWaitPeriod && !isCurrentlyInWaitPeriod) {
+        // User was in wait period but now it's expired - use VIRTUAL closure counting
+        int virtualClosureCount = getVirtualClosureCountForPostWaitPeriod(userId, companyId, campaignId, effectiveDate);
+        
+        log.info("POST-WAIT-PERIOD: Virtual closure count for campaign {}: {}", campaignId, virtualClosureCount);
+        
+        if (virtualClosureCount == 0) {
+            // First virtual closure - HIDE banner
+            log.info("POST-WAIT-PERIOD: First virtual closure for campaign {} - hiding banner", campaignId);
+            
+            incrementVirtualClosureCount(userId, companyId, campaignId, effectiveDate);
+            
+            response.setClosureCount(1);
+            response.setAction("RECORDED_FIRST_CLOSURE");
+            response.setMessage("Closure recorded. Banner hidden for this session.");
+            response.setRequiresUserInput(false);
+            
+        } else {
+            // Second+ virtual closure - show SecondClosurePopup
+            log.info("POST-WAIT-PERIOD: Second+ virtual closure ({}) for campaign {} - showing SecondClosurePopup", 
+                    virtualClosureCount + 1, campaignId);
+            
+            incrementVirtualClosureCount(userId, companyId, campaignId, effectiveDate);
+            
+            // Also increment the actual closure count for database consistency
+            UserInsightClosure closure = closureRepository
+                    .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
+                    .orElse(createNewClosure(userId, companyId, campaignId));
+            closure.setClosureCount(closure.getClosureCount() + 1);
+            closure.setLastClosureDate(effectiveDate);
+            closure.setUpdatedDate(effectiveDate);
+            closureRepository.save(closure);
+            
+            response.setClosureCount(virtualClosureCount + 1);
+            response.setAction("PROMPT_GLOBAL_PREFERENCE");
+            response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
+            response.setRequiresUserInput(true);
+            response.setIsGlobalPrompt(true);
         }
-    
+        
+    } else {
+        // Normal logic for users who haven't been in wait period OR are currently in wait period
+        
         // Find or create closure record
         UserInsightClosure closure = closureRepository
                 .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
                 .orElse(createNewClosure(userId, companyId, campaignId));
-    
-        // Check if user was previously in wait period
-        boolean wasInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
-        boolean isCurrentlyInWaitPeriod = isUserInWaitPeriod(userId, companyId, effectiveDate);
-        
-        log.info("Wait period status - Previously: {}, Currently: {}", wasInWaitPeriod, isCurrentlyInWaitPeriod);
-    
-        InsightClosureResponseDTO response = new InsightClosureResponseDTO();
-        response.setCampaignId(campaignId);
-        response.setEffectiveDate(effectiveDate);
-    
-        // SIMPLE LOGIC: For users who were in wait period and are now out, reset closure behavior
-        if (wasInWaitPeriod && !isCurrentlyInWaitPeriod) {
-            // User was in wait period but now it's expired - use special post-wait-period logic
+
+        // Increment closure count
+        closure.setClosureCount(closure.getClosureCount() + 1);
+        closure.setLastClosureDate(effectiveDate);
+        response.setClosureCount(closure.getClosureCount());
+
+        if (closure.getClosureCount() == 1) {
+            // FIRST CLOSURE: Hide banner
+            log.info("NORMAL: First closure for user {}. Hiding banner (closure count: {})", 
+                    userId, closure.getClosureCount());
+            closure.setFirstClosureDate(effectiveDate);
+            response.setAction("RECORDED_FIRST_CLOSURE");
+            response.setMessage("Closure recorded. Banner hidden for this session.");
+            response.setRequiresUserInput(false);
             
-            // Check if this campaign has been handled in post-wait-period mode
-            boolean isPostWaitPeriodHandled = isPostWaitPeriodCampaignHandled(userId, companyId, campaignId, effectiveDate);
-            
-            if (!isPostWaitPeriodHandled) {
-                // First closure in post-wait-period mode - ALWAYS hide banner
-                log.info("POST-WAIT-PERIOD: First closure for campaign {} - hiding banner", campaignId);
-                
-                // Mark this campaign as handled in post-wait-period mode
-                markPostWaitPeriodCampaignHandled(userId, companyId, campaignId, effectiveDate);
-                
-                response.setClosureCount(1); // Always report as 1 for post-wait-period first closure
-                response.setAction("RECORDED_FIRST_CLOSURE");
-                response.setMessage("Closure recorded. Banner hidden for this session.");
-                response.setRequiresUserInput(false);
-                
-            } else {
-                // Second+ closure in post-wait-period mode - show SecondClosurePopup
-                log.info("POST-WAIT-PERIOD: Second+ closure for campaign {} - showing SecondClosurePopup", campaignId);
-                
-                closure.setClosureCount(closure.getClosureCount() + 1);
-                closure.setLastClosureDate(effectiveDate);
-                
-                response.setClosureCount(closure.getClosureCount());
+        } else {
+            // SECOND+ CLOSURE: Show appropriate popup
+            if (wasInWaitPeriod) {
+                // User was in wait period (but still is) - show SecondClosurePopup
+                log.info("NORMAL: Second+ closure ({}) for user {} who was in wait period. Showing SecondClosurePopup", 
+                        closure.getClosureCount(), userId);
                 response.setAction("PROMPT_GLOBAL_PREFERENCE");
                 response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
                 response.setRequiresUserInput(true);
                 response.setIsGlobalPrompt(true);
-            }
-            
-        } else {
-            // Normal logic for users who haven't been in wait period OR are currently in wait period
-            
-            // Increment closure count
-            closure.setClosureCount(closure.getClosureCount() + 1);
-            closure.setLastClosureDate(effectiveDate);
-            response.setClosureCount(closure.getClosureCount());
-    
-            if (closure.getClosureCount() == 1) {
-                // FIRST CLOSURE: Hide banner
-                log.info("FIRST closure for user {}. Hiding banner (closure count: {})", 
-                        userId, closure.getClosureCount());
-                closure.setFirstClosureDate(effectiveDate);
-                response.setAction("RECORDED_FIRST_CLOSURE");
-                response.setMessage("Closure recorded. Banner hidden for this session.");
-                response.setRequiresUserInput(false);
-                
             } else {
-                // SECOND+ CLOSURE: Show appropriate popup
-                if (wasInWaitPeriod) {
-                    // User was in wait period (but still is) - show SecondClosurePopup
-                    log.info("SECOND+ closure ({}) for user {} who was in wait period. Showing SecondClosurePopup", 
-                            closure.getClosureCount(), userId);
-                    response.setAction("PROMPT_GLOBAL_PREFERENCE");
-                    response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
-                    response.setRequiresUserInput(true);
-                    response.setIsGlobalPrompt(true);
-                } else {
-                    // User has never been in wait period - show FirstClosurePopup
-                    log.info("SECOND+ closure ({}) for user {} who has never been in wait period. Showing FirstClosurePopup", 
-                            closure.getClosureCount(), userId);
-                    response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
-                    response.setMessage("Would you like to see this campaign again in the future?");
-                    response.setRequiresUserInput(true);
-                    response.setIsGlobalPrompt(false);
-                }
+                // User has never been in wait period - show FirstClosurePopup
+                log.info("NORMAL: Second+ closure ({}) for user {} who has never been in wait period. Showing FirstClosurePopup", 
+                        closure.getClosureCount(), userId);
+                response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
+                response.setMessage("Would you like to see this campaign again in the future?");
+                response.setRequiresUserInput(true);
+                response.setIsGlobalPrompt(false);
             }
         }
-    
+
         closure.setUpdatedDate(effectiveDate);
         closureRepository.save(closure);
-        return response;
     }
+
+    return response;
+}
     
     
     /**
@@ -1121,6 +1126,140 @@ private void ensureNoDuplicateRecords(String userId, String companyId, String ca
 
 
 
+
+
+
+
+
+private int getVirtualClosureCountForPostWaitPeriod(String userId, String companyId, 
+        String campaignId, Date currentDate) {
+    
+    try {
+        // Get the wait period end date to know when virtual counting started
+        Optional<UserGlobalPreference> prefOpt = globalPreferenceRepository.findByUserId(userId);
+        if (!prefOpt.isPresent() || prefOpt.get().getGlobalWaitUntilDate() == null) {
+            return 0;
+        }
+        
+        Date waitPeriodEndDate = prefOpt.get().getGlobalWaitUntilDate();
+        
+        // Store virtual closure count in UserGlobalPreference as JSON-like string
+        // Format: "VIRTUAL_CLOSURES:{campaignId1}:2,{campaignId2}:1"
+        UserGlobalPreference pref = prefOpt.get();
+        String virtualClosureData = pref.getGlobalWaitReason(); // Reuse this field for virtual data
+        
+        if (virtualClosureData == null || !virtualClosureData.contains("VIRTUAL_CLOSURES:")) {
+            return 0; // No virtual closures recorded yet
+        }
+        
+        // Parse virtual closure count for this campaign
+        String searchPattern = campaignId + ":";
+        int startIndex = virtualClosureData.indexOf(searchPattern);
+        if (startIndex == -1) {
+            return 0; // This campaign not found in virtual data
+        }
+        
+        startIndex += searchPattern.length();
+        int endIndex = virtualClosureData.indexOf(",", startIndex);
+        if (endIndex == -1) {
+            endIndex = virtualClosureData.length();
+        }
+        
+        String countStr = virtualClosureData.substring(startIndex, endIndex);
+        return Integer.parseInt(countStr);
+        
+    } catch (Exception e) {
+        log.error("Error getting virtual closure count for campaign {}: {}", campaignId, e.getMessage());
+        return 0; // Default to 0 if any error
+    }
+}
+
+/**
+ * Increment virtual closure count for a campaign after wait period
+ */
+private void incrementVirtualClosureCount(String userId, String companyId, 
+        String campaignId, Date currentDate) {
+    
+    try {
+        Optional<UserGlobalPreference> prefOpt = globalPreferenceRepository.findByUserId(userId);
+        if (!prefOpt.isPresent()) {
+            return;
+        }
+        
+        UserGlobalPreference pref = prefOpt.get();
+        String virtualClosureData = pref.getGlobalWaitReason();
+        
+        if (virtualClosureData == null || !virtualClosureData.contains("VIRTUAL_CLOSURES:")) {
+            // Initialize virtual closure data
+            virtualClosureData = "VIRTUAL_CLOSURES:" + campaignId + ":1";
+        } else {
+            // Update existing virtual closure data
+            String searchPattern = campaignId + ":";
+            int startIndex = virtualClosureData.indexOf(searchPattern);
+            
+            if (startIndex == -1) {
+                // Add new campaign to virtual data
+                virtualClosureData += "," + campaignId + ":1";
+            } else {
+                // Update existing campaign count
+                startIndex += searchPattern.length();
+                int endIndex = virtualClosureData.indexOf(",", startIndex);
+                if (endIndex == -1) {
+                    endIndex = virtualClosureData.length();
+                }
+                
+                String countStr = virtualClosureData.substring(startIndex, endIndex);
+                int currentCount = Integer.parseInt(countStr);
+                int newCount = currentCount + 1;
+                
+                virtualClosureData = virtualClosureData.substring(0, startIndex) + 
+                                   newCount + 
+                                   virtualClosureData.substring(endIndex);
+            }
+        }
+        
+        pref.setGlobalWaitReason(virtualClosureData);
+        pref.setUpdatedDate(currentDate);
+        globalPreferenceRepository.save(pref);
+        
+        log.info("Updated virtual closure count for campaign {}: {}", campaignId, virtualClosureData);
+        
+    } catch (Exception e) {
+        log.error("Error incrementing virtual closure count for campaign {}: {}", campaignId, e.getMessage());
+    }
+}
+
+/**
+ * Reset virtual closure counts when a new wait period starts
+ * Call this when user enters a new wait period
+ */
+public void resetVirtualClosureCountsForNewWaitPeriod(String userId, Date effectiveDate) {
+    try {
+        Optional<UserGlobalPreference> prefOpt = globalPreferenceRepository.findByUserId(userId);
+        if (prefOpt.isPresent()) {
+            UserGlobalPreference pref = prefOpt.get();
+            
+            // Clear virtual closure data when new wait period starts
+            String currentReason = pref.getGlobalWaitReason();
+            if (currentReason != null && currentReason.contains("VIRTUAL_CLOSURES:")) {
+                // Extract the original reason before virtual data
+                int virtualIndex = currentReason.indexOf("VIRTUAL_CLOSURES:");
+                String originalReason = virtualIndex > 0 ? currentReason.substring(0, virtualIndex).trim() : "";
+                if (originalReason.endsWith(";")) {
+                    originalReason = originalReason.substring(0, originalReason.length() - 1);
+                }
+                pref.setGlobalWaitReason(originalReason);
+            }
+            
+            pref.setUpdatedDate(effectiveDate);
+            globalPreferenceRepository.save(pref);
+            
+            log.info("Reset virtual closure counts for user {} at start of new wait period", userId);
+        }
+    } catch (Exception e) {
+        log.error("Error resetting virtual closure counts for user {}: {}", userId, e.getMessage());
+    }
+}
 
 
 }
