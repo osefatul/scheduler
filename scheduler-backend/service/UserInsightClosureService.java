@@ -4,7 +4,17 @@ import com.usbank.corp.dcr.api.entity.*;
 import com.usbank.corp.dcr.api.exception.DataHandlingException;
 import com.usbank.corp.dcr.api.model.*;
 import com.usbank.corp.dcr.api.repository.*;
+
+import entity.UserGlobalPreference;
+import entity.UserInsightClosure;
 import lombok.extern.slf4j.Slf4j;
+import model.CampaignWaitStatusDTO;
+import model.ClosureStatisticsDTO;
+import model.InsightClosureResponseDTO;
+import repository.UserCampaignTrackerRepository;
+import repository.UserGlobalPreferenceRepository;
+import repository.UserInsightClosureRepository;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -40,81 +50,102 @@ public class UserInsightClosureService {
      * FIXED: Proper logic for weekly rotation system with waiting periods
      */
     @Transactional
-    public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
-            String campaignId, Date effectiveDate) throws DataHandlingException {
+public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
+        String campaignId, Date effectiveDate) throws DataHandlingException {
 
-        log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
-                userId, companyId, campaignId, effectiveDate);
+    log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
+            userId, companyId, campaignId, effectiveDate);
 
-        // Check if user has global opt-out
-        if (isUserGloballyOptedOut(userId, effectiveDate)) {
-            throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
-                    "User has opted out of all insights");
-        }
+    // Check if user has global opt-out
+    if (isUserGloballyOptedOut(userId, effectiveDate)) {
+        throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
+                "User has opted out of all insights");
+    }
 
-        // Find or create closure record
-        UserInsightClosure closure = closureRepository
-                .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
-                .orElse(createNewClosure(userId, companyId, campaignId));
+    // Find or create closure record
+    UserInsightClosure closure = closureRepository
+            .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
+            .orElse(createNewClosure(userId, companyId, campaignId));
 
-        // Increment closure count
-        closure.setClosureCount(closure.getClosureCount() + 1);
-        closure.setLastClosureDate(effectiveDate);
+    // Increment closure count
+    closure.setClosureCount(closure.getClosureCount() + 1);
+    closure.setLastClosureDate(effectiveDate);
 
-        InsightClosureResponseDTO response = new InsightClosureResponseDTO();
-        response.setCampaignId(campaignId);
-        response.setClosureCount(closure.getClosureCount());
-        response.setEffectiveDate(effectiveDate);
+    InsightClosureResponseDTO response = new InsightClosureResponseDTO();
+    response.setCampaignId(campaignId);
+    response.setClosureCount(closure.getClosureCount());
+    response.setEffectiveDate(effectiveDate);
 
-        if (closure.getClosureCount() == 1) {
-            // FIRST CLOSURE: Record closure but DO NOT block campaign
-            log.info("FIRST closure for campaign {} at date {}. Campaign remains eligible based on normal rules.", 
-                    campaignId, effectiveDate);
+    // CRITICAL FIX: Determine popup type based on wait period history, not just current closure count
+    boolean wasInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
+    boolean isCurrentlyInWaitPeriod = isUserInWaitPeriod(userId, companyId, effectiveDate);
+    
+    log.info("Wait period status - Previously: {}, Currently: {}", wasInWaitPeriod, isCurrentlyInWaitPeriod);
+
+    if (closure.getClosureCount() == 1) {
+        // FIRST CLOSURE
+        if (wasInWaitPeriod || isCurrentlyInWaitPeriod) {
+            // User was previously in wait period OR is currently in one
+            // Show SECOND closure popup (global options) immediately on first closure
+            log.info("FIRST closure for user {} who was previously in wait period. Showing SecondClosurePopup for campaign {}", 
+                    userId, campaignId);
+            response.setAction("PROMPT_GLOBAL_PREFERENCE");
+            response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
+            response.setRequiresUserInput(true);
+            response.setIsGlobalPrompt(true);
+        } else {
+            // User has never been in waiting period - record closure but don't block
+            log.info("FIRST closure for new user {}. Campaign remains eligible based on normal rules.", userId);
             closure.setFirstClosureDate(effectiveDate);
             response.setAction("RECORDED_FIRST_CLOSURE");
             response.setMessage("Closure recorded. Campaign remains available based on normal eligibility rules.");
             response.setRequiresUserInput(false);
-            
-        } else if (closure.getClosureCount() == 2) {
-            // SECOND CLOSURE: Check if user was ever in waiting period to determine popup type
-            log.info("SECOND closure for campaign {} at date {}. Checking user's waiting period history.", 
-                    campaignId, effectiveDate);
-            
-            // CRITICAL: Check if user is currently in waiting period OR was previously in waiting period
-            boolean isCurrentlyInWaitPeriod = isUserInWaitPeriod(userId, companyId, effectiveDate);
-            boolean wasPreviouslyInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
-            
-            if (isCurrentlyInWaitPeriod || wasPreviouslyInWaitPeriod) {
-                // User is in waiting period OR was previously in waiting period
-                // Show SECOND closure popup (global options)
-                log.info("User {} was previously in waiting period or is currently in one. Showing SecondClosurePopup for campaign {}", 
-                        userId, campaignId);
-                response.setAction("PROMPT_GLOBAL_PREFERENCE");
-                response.setMessage("You've closed campaigns recently. Want to stop seeing these?");
-                response.setRequiresUserInput(true);
-                response.setIsGlobalPrompt(true);
-            } else {
-                // User has never been in waiting period - show FIRST closure popup
-                log.info("User {} has never been in waiting period. Showing FirstClosurePopup for campaign {}", 
-                        userId, campaignId);
-                response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
-                response.setMessage("Would you like to see this campaign again in the future?");
-                response.setRequiresUserInput(true);
-                response.setIsGlobalPrompt(false);
-            }
-            
-        } else {
-            // MULTIPLE CLOSURES: Should not happen with correct logic
-            log.warn("Multiple closures ({}) for campaign {} - this shouldn't happen", 
-                    closure.getClosureCount(), campaignId);
-            response.setAction("UNEXPECTED_MULTIPLE_CLOSURE");
-            response.setMessage("Unexpected closure count. Please contact support.");
         }
-
-        closure.setUpdatedDate(effectiveDate);
-        closureRepository.save(closure);
-        return response;
+        
+    } else if (closure.getClosureCount() == 2) {
+        // SECOND CLOSURE
+        if (wasInWaitPeriod || isCurrentlyInWaitPeriod) {
+            // User was previously in wait period - ALWAYS show SecondClosurePopup
+            log.info("SECOND closure for user {} who was previously in wait period. Showing SecondClosurePopup for campaign {}", 
+                    userId, campaignId);
+            response.setAction("PROMPT_GLOBAL_PREFERENCE");
+            response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
+            response.setRequiresUserInput(true);
+            response.setIsGlobalPrompt(true);
+        } else {
+            // User has never been in waiting period - show FirstClosurePopup
+            log.info("SECOND closure for user {} who has never been in wait period. Showing FirstClosurePopup for campaign {}", 
+                    userId, campaignId);
+            response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
+            response.setMessage("Would you like to see this campaign again in the future?");
+            response.setRequiresUserInput(true);
+            response.setIsGlobalPrompt(false);
+        }
+        
+    } else {
+        // MULTIPLE CLOSURES (3+): For users who were in wait period, always show SecondClosurePopup
+        if (wasInWaitPeriod || isCurrentlyInWaitPeriod) {
+            log.info("MULTIPLE closures ({}) for user {} who was previously in wait period. Showing SecondClosurePopup for campaign {}", 
+                    closure.getClosureCount(), userId, campaignId);
+            response.setAction("PROMPT_GLOBAL_PREFERENCE");
+            response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
+            response.setRequiresUserInput(true);
+            response.setIsGlobalPrompt(true);
+        } else {
+            // User has never been in waiting period - show FirstClosurePopup
+            log.info("MULTIPLE closures ({}) for user {} who has never been in wait period. Showing FirstClosurePopup for campaign {}", 
+                    closure.getClosureCount(), userId, campaignId);
+            response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
+            response.setMessage("Would you like to see this campaign again in the future?");
+            response.setRequiresUserInput(true);
+            response.setIsGlobalPrompt(false);
+        }
     }
+
+    closure.setUpdatedDate(effectiveDate);
+    closureRepository.save(closure);
+    return response;
+}
     
     /**
      * Handle user's response to preference prompt (backward compatible)
