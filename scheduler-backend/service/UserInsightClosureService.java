@@ -50,70 +50,70 @@ public class UserInsightClosureService {
      * FIXED: Proper logic for weekly rotation system with waiting periods
      */
     @Transactional
-    public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
-    String campaignId, Date effectiveDate) throws DataHandlingException {
+public InsightClosureResponseDTO recordInsightClosure(String userId, String companyId, 
+        String campaignId, Date effectiveDate) throws DataHandlingException {
 
-log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
-        userId, companyId, campaignId, effectiveDate);
+    log.info("Recording insight closure for user: {}, company: {}, campaign: {} at date: {}", 
+            userId, companyId, campaignId, effectiveDate);
 
-// Check if user has global opt-out
-if (isUserGloballyOptedOut(userId, effectiveDate)) {
-    throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
-            "User has opted out of all insights");
-}
+    // Check if user has global opt-out
+    if (isUserGloballyOptedOut(userId, effectiveDate)) {
+        throw new DataHandlingException(HttpStatus.FORBIDDEN.toString(), 
+                "User has opted out of all insights");
+    }
 
-// Find or create closure record
-UserInsightClosure closure = closureRepository
-        .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
-        .orElse(createNewClosure(userId, companyId, campaignId));
+    // Find or create closure record
+    UserInsightClosure closure = closureRepository
+            .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
+            .orElse(createNewClosure(userId, companyId, campaignId));
 
-// Increment closure count
-closure.setClosureCount(closure.getClosureCount() + 1);
-closure.setLastClosureDate(effectiveDate);
+    // Increment closure count
+    closure.setClosureCount(closure.getClosureCount() + 1);
+    closure.setLastClosureDate(effectiveDate);
 
-InsightClosureResponseDTO response = new InsightClosureResponseDTO();
-response.setCampaignId(campaignId);
-response.setClosureCount(closure.getClosureCount());
-response.setEffectiveDate(effectiveDate);
+    InsightClosureResponseDTO response = new InsightClosureResponseDTO();
+    response.setCampaignId(campaignId);
+    response.setClosureCount(closure.getClosureCount());
+    response.setEffectiveDate(effectiveDate);
 
-// SIMPLIFIED LOGIC: Check if user was ever in wait period - if yes, ALWAYS show SecondClosurePopup
-boolean wasInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
-
-log.info("Wait period history check - Previously in wait period: {}", wasInWaitPeriod);
-
-if (wasInWaitPeriod) {
-    // User was previously in wait period - ALWAYS show SecondClosurePopup for ANY closure count
-    log.info("User {} was previously in wait period. ALWAYS showing SecondClosurePopup for campaign {} (closure count: {})", 
-            userId, campaignId, closure.getClosureCount());
-    response.setAction("PROMPT_GLOBAL_PREFERENCE");
-    response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
-    response.setRequiresUserInput(true);
-    response.setIsGlobalPrompt(true);
+    // Follow same pattern for all users - first closure hides banner, second+ shows popup
+    boolean wasInWaitPeriod = wasUserPreviouslyInWaitPeriod(userId, companyId, effectiveDate);
     
-} else {
-    // User has NEVER been in wait period - use original logic
+    log.info("Wait period history check - Previously in wait period: {}", wasInWaitPeriod);
+
     if (closure.getClosureCount() == 1) {
-        // First closure for new user - just record it
-        log.info("FIRST closure for new user {}. Campaign remains eligible based on normal rules.", userId);
+        // FIRST CLOSURE: Always just hide banner (same for all users)
+        log.info("FIRST closure for user {}. Hiding banner without popup (closure count: {})", 
+                userId, closure.getClosureCount());
         closure.setFirstClosureDate(effectiveDate);
         response.setAction("RECORDED_FIRST_CLOSURE");
-        response.setMessage("Closure recorded. Campaign remains available based on normal eligibility rules.");
+        response.setMessage("Closure recorded. Banner hidden for this session.");
         response.setRequiresUserInput(false);
         
     } else {
-        // Second+ closure for new user - show FirstClosurePopup
-        log.info("MULTIPLE closures ({}) for new user {}. Showing FirstClosurePopup for campaign {}", 
-                closure.getClosureCount(), userId, campaignId);
-        response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
-        response.setMessage("Would you like to see this campaign again in the future?");
-        response.setRequiresUserInput(true);
-        response.setIsGlobalPrompt(false);
+        // SECOND+ CLOSURE: Show popup based on wait period history
+        if (wasInWaitPeriod) {
+            // User was previously in wait period - show SecondClosurePopup
+            log.info("SECOND+ closure ({}) for user {} who was previously in wait period. Showing SecondClosurePopup for campaign {}", 
+                    closure.getClosureCount(), userId, campaignId);
+            response.setAction("PROMPT_GLOBAL_PREFERENCE");
+            response.setMessage("We've noticed you're not interested in other products. Would you like to stop seeing them?");
+            response.setRequiresUserInput(true);
+            response.setIsGlobalPrompt(true);
+        } else {
+            // User has NEVER been in wait period - show FirstClosurePopup
+            log.info("SECOND+ closure ({}) for user {} who has never been in wait period. Showing FirstClosurePopup for campaign {}", 
+                    closure.getClosureCount(), userId, campaignId);
+            response.setAction("PROMPT_CAMPAIGN_PREFERENCE");
+            response.setMessage("Would you like to see this campaign again in the future?");
+            response.setRequiresUserInput(true);
+            response.setIsGlobalPrompt(false);
+        }
     }
-}
 
-closure.setUpdatedDate(effectiveDate);
-closureRepository.save(closure);
-return response;
+    closure.setUpdatedDate(effectiveDate);
+    closureRepository.save(closure);
+    return response;
 }
     
     /**
