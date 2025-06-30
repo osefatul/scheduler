@@ -180,23 +180,51 @@ public InsightClosureResponseDTO recordInsightClosure(String userId, String comp
     public void handlePreferenceResponse(String userId, String companyId, String campaignId,
             boolean wantsToSee, String reason, boolean isGlobalResponse, Date effectiveDate) 
             throws DataHandlingException {
-
+    
         log.info("Handling preference response for user: {}, campaign: {}, wantsToSee: {}, isGlobal: {} at date: {}", 
                 userId, campaignId, wantsToSee, isGlobalResponse, effectiveDate);
-
+    
         if (isGlobalResponse) {
             // This is response from SecondClosurePopup
             if (wantsToSee) {
-                // User chose "Close now but show in future" - 1-month wait for ALL campaigns
-                log.info("User chose 'show in future'. Setting 1-month wait for ALL campaigns");
-                setOneMonthWaitForAllCampaigns(userId, companyId, reason, effectiveDate);
+                // User chose "Close now but show in future" 
+                // Permanently close THIS campaign + 1-month wait for ALL campaigns
+                log.info("User chose 'close now but show in future'. Permanently closing campaign {} + setting 1-month wait for ALL campaigns", campaignId);
+                
+                // 1. PERMANENTLY CLOSE THE CURRENT CAMPAIGN
+                UserInsightClosure currentCampaignClosure = closureRepository
+                        .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
+                        .orElseThrow(() -> new DataHandlingException(HttpStatus.NOT_FOUND.toString(),
+                                "No closure record found for current campaign"));
+                
+                // Mark current campaign as permanently closed
+                currentCampaignClosure.setPermanentlyClosed(true);
+                currentCampaignClosure.setClosureReason(reason != null ? reason : "User chose 'close now but show in future' - current campaign permanently closed");
+                
+                // Set nextEligibleDate far in future for this campaign (permanent block)
+                Calendar cal = Calendar.getInstance();
+                cal.setTime(effectiveDate);
+                cal.add(Calendar.YEAR, 10);  // 10 years = effectively permanent for this campaign
+                currentCampaignClosure.setNextEligibleDate(cal.getTime());
+                currentCampaignClosure.setUpdatedDate(effectiveDate);
+                
+                closureRepository.save(currentCampaignClosure);
+                
+                log.info("✅ Current campaign {} permanently closed with nextEligibleDate: {}", 
+                         campaignId, currentCampaignClosure.getNextEligibleDate());
+                
+                // 2. Set 1-month waiting period for ALL campaigns (including future ones)
+                setOneMonthWaitForAllCampaigns(userId, companyId, 
+                    "User chose 'close now but show in future' for campaign " + campaignId + " - current campaign permanently closed", 
+                    effectiveDate);
+                
             } else {
-                // User chose "Stop showing this ad" - GLOBAL OPT-OUT
+                // User chose "Stop showing this ad" - GLOBAL OPT-OUT (existing logic is correct)
                 log.info("User chose 'stop showing ads'. Global opt-out for user {}", userId);
                 handleGlobalOptOut(userId, reason, effectiveDate);
             }
         } else {
-            // This is response from FirstClosurePopup
+            // This is response from FirstClosurePopup (existing logic is correct)
             UserInsightClosure closure = closureRepository
                     .findByUserIdAndCompanyIdAndCampaignId(userId, companyId, campaignId)
                     .orElseThrow(() -> new DataHandlingException(HttpStatus.NOT_FOUND.toString(),
